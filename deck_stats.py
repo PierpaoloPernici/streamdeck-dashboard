@@ -440,8 +440,41 @@ def main():
             time.sleep(3)
 
 
+def render_mockup(key_images: list) -> Image.Image:
+    """Compose the key icons into a device mockup (product-shot style)."""
+    scale = 2
+    k = KEY_W * scale          # 192px key
+    gap, margin, radius = 18, 38, 16
+    cols, rows = COLS, len(key_images) // COLS
+    body_w = cols * k + (cols - 1) * gap + 2 * margin
+    body_h = rows * k + (rows - 1) * gap + 2 * margin
+    pad = 50                    # outer padding for the shot
+    canvas = Image.new("RGB", (body_w + 2 * pad, body_h + 2 * pad), (8, 8, 12))
+    d = ImageDraw.Draw(canvas)
+
+    # device body with vertical gradient
+    top, bottom = (32, 32, 40), (16, 16, 22)
+    for y in range(body_h):
+        t = y / max(1, body_h - 1)
+        col = tuple(int(top[i] + (bottom[i] - top[i]) * t) for i in range(3))
+        d.line([(pad, pad + y), (pad + body_w, pad + y)], fill=col)
+    d.rounded_rectangle([pad, pad, pad + body_w, pad + body_h], radius=radius,
+                        outline=(70, 70, 82), width=2)
+
+    # keys with rounded corners
+    mask = Image.new("L", (k, k), 0)
+    ImageDraw.Draw(mask).rounded_rectangle([0, 0, k - 1, k - 1], radius=12, fill=255)
+    for i, img in enumerate(key_images):
+        row, col = divmod(i, COLS)
+        x = pad + margin + col * (k + gap)
+        y = pad + margin + row * (k + gap)
+        canvas.paste(img.resize((k, k), Image.LANCZOS), (x, y), mask)
+        d.rounded_rectangle([x, y, x + k, y + k], radius=12, outline=(0, 0, 0), width=2)
+    return canvas
+
+
 def preview():
-    """Render the whole 8x4 deck preview to /tmp/deck_preview."""
+    """Render the whole 8x4 deck preview (grid + device mockup) to /tmp/deck_preview."""
     out = Path("/tmp/deck_preview")
     out.mkdir(exist_ok=True)
     s = {
@@ -461,6 +494,7 @@ def preview():
     APP.st["disk_r"] = (0, time.monotonic())
     APP.st["disk_w"] = (0, time.monotonic())
 
+    key_imgs = []
     grid = Image.new("RGB", (COLS * KEY_W, 4 * KEY_H), (0, 0, 0))
     for row, col, label, kind, getter, warn, crit in WIDGETS:
         value = getter(APP, s)
@@ -471,10 +505,13 @@ def preview():
         if kind == "time":
             value = "08:45"
         img = render_key(label, kind, value, warn, crit)
+        key_imgs.append(img)
         grid.paste(img, (col * KEY_W, row * KEY_H))
         print(f"  ({row},{col}) {label:6s} {kind:5s} -> {value}")
     grid.save(out / "deck_preview.png")
-    print(f"\nFull preview: {out}/deck_preview.png")
+    render_mockup(key_imgs).save(out / "deck_mockup.png")
+    print(f"\nPreview grid:     {out}/deck_preview.png")
+    print(f"Device mockup:    {out}/deck_mockup.png")
 
 
 if __name__ == "__main__":

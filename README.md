@@ -1,6 +1,8 @@
 # Deck Stats — Stream Deck 8×4 dashboard
 
-![Dashboard layout](assets/deck-dashboard.png)
+![Dashboard layout — device mockup](assets/deck-dashboard.png)
+
+> Device mockup rendered by `deck_stats.py --preview`; shown values are simulated.
 
 On-screen system monitoring for **Stream Deck XL** (32 addressable keys =
 4 rows × 8 columns). No Elgato plugins required.
