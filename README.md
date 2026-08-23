@@ -1,5 +1,7 @@
 # Deck Stats — Stream Deck 8×4 dashboard
 
+![Dashboard layout](assets/deck-dashboard.png)
+
 On-screen system monitoring for **Stream Deck XL** (32 addressable keys =
 4 rows × 8 columns). No Elgato plugins required.
 
