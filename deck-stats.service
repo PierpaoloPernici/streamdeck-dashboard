@@ -1,0 +1,13 @@
+[Unit]
+Description=Stream Deck stats dashboard (CPU/GPU/temp)
+After=graphical-session.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/progetti/deck
+ExecStart=%h/progetti/deck/.venv/bin/python -u %h/progetti/deck/deck_stats.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

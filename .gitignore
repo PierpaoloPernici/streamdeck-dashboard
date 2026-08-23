@@ -1,0 +1,8 @@
+# Virtualenv and Python artifacts
+.venv/
+__pycache__/
+*.py[cod]
+
+# Temp files
+*.log
+/tmp/
