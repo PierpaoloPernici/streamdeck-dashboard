@@ -1,6 +1,6 @@
 # Deck Stats — Stream Deck 8×4 dashboard
 
-![Dashboard layout — device mockup](assets/deck-dashboard.png)
+![Dashboard layout — device mockup](assets/deck-mockup.png)
 
 > Device mockup rendered by `deck_stats.py --preview`; shown values are simulated.
 
