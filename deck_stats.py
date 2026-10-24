@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Stream Deck 8x4 dashboard (final layout).
 
-  Row 0  CPU    UTIL | TEMP | CCD2 | CLK | PWR | LOAD | MAX | SWAP
-  Row 1  GPU    UTIL | TEMP | VRAM | MEM | PWR | FAN  | CLK | MAX
-  Row 2  SYSTEM RAM  | MEM  | NV1  | NV2 | NV3 | PSU | VRM  | FAN
-  Row 3  LINUX  LOAD | DOWN | UP   | READ|WRITE| 12V | UPT | TIME
+  Row 0  CPU    UTIL | TEMP | MAX  | CLK | PWR | LOAD | CCD1 | CCD2
+  Row 1  GPU    UTIL | TEMP | MAX  | CLK | PWR | FAN  | VRAM | MEM
+  Row 2  SYSTEM TIME | NV1  | NV2  | NV3 | DSK | SWAP | RAM  | MEM
+  Row 3  I/O+PSU DOWN| UP   | READ |WRITE| PSU | FAN  | VRM  | 12V
+
+Columns 0-4 of rows 0-1 carry the same metric for CPU and GPU, so the two
+blocks read as one table; PSU sits under the two PWR keys (all watts) and the
+PSU FAN under the GPU FAN. Row 3 is I/O on the left, power supply on the right.
 
 Key layout (96x96 px):
 
@@ -521,50 +525,51 @@ WIDGETS = [
     # --- Row 0: CPU ---
     (0, 0, "UTIL", "pct",  lambda a, s: s["cpu_pct"], 60, 85),
     (0, 1, "TEMP", "temp", lambda a, s: s["cpu_temp"], 75, 90),
-    (0, 2, CCD_LABEL, "temp", lambda a, s: s["ccd_temp"], 75, 90),
+    (0, 2, "MAX",  "peak", lambda a, s: a.peak("cpu", s["cpu_temp"], s["t"]),
+     75, 90),
     (0, 3, "CLK",  "ghz",  lambda a, s: s["cpu_clk"], 0, 0),
     (0, 4, "PWR",  "w",    lambda a, s: a.cpu_pwr(s), 0, 0),
     (0, 5, "LOAD", "loadpair", lambda a, s: tuple(s["load"]), 0, 0),
-    (0, 6, "MAX",  "peak", lambda a, s: a.peak("cpu", s["cpu_temp"], s["t"]),
-     75, 90),
-    (0, 7, "SWAP", "pct",  lambda a, s: s["swap"].percent, 50, 80),
+    (0, 6, CCD_LABEL, "temp", lambda a, s: s["ccd_temp"], 75, 90),
+    # TODO(T13b): CCD2 takes this cell; UPT goes away with it (T13c).
+    (0, 7, "UPT",  "upt",  lambda a, s: time.time() - psutil.boot_time(), 0, 0),
     # --- Row 1: GPU ---
     (1, 0, "UTIL", "pct",  lambda a, s: (s["gpu"] or {}).get("util"), 60, 85),
     (1, 1, "TEMP", "temp", lambda a, s: (s["gpu"] or {}).get("temp"), 75, 85),
-    (1, 2, "VRAM", "pct",  lambda a, s: (
-        (s["gpu"]["mem_used"] / s["gpu"]["mem_total"] * 100)
-        if s["gpu"] and s["gpu"].get("mem_total") else None), 75, 90),
-    (1, 3, "MEM",  "gb",   lambda a, s: (
-        (s["gpu"]["mem_used"] / 1024) if s["gpu"] else None), 0, 0),
+    (1, 2, "MAX",  "peak", lambda a, s: a.peak(
+        "gpu", (s["gpu"] or {}).get("temp"), s["t"]), 75, 85),
+    (1, 3, "CLK",  "ghz",  lambda a, s: (s["gpu"] or {}).get("clk"), 0, 0),
     (1, 4, "PWR",  "w",    lambda a, s: (s["gpu"] or {}).get("power"),
      GPU_W_WARN, GPU_W_CRIT),
     (1, 5, "FAN",  "pct",  lambda a, s: (s["gpu"] or {}).get("fan"), 70, 90),
-    (1, 6, "CLK",  "ghz",  lambda a, s: (s["gpu"] or {}).get("clk"), 0, 0),
-    (1, 7, "MAX",  "peak", lambda a, s: a.peak(
-        "gpu", (s["gpu"] or {}).get("temp"), s["t"]), 75, 85),
+    (1, 6, "VRAM", "pct",  lambda a, s: (
+        (s["gpu"]["mem_used"] / s["gpu"]["mem_total"] * 100)
+        if s["gpu"] and s["gpu"].get("mem_total") else None), 75, 90),
+    (1, 7, "MEM",  "gb",   lambda a, s: (
+        (s["gpu"]["mem_used"] / 1024) if s["gpu"] else None), 0, 0),
     # --- Row 2: System ---
-    (2, 0, "RAM",  "pct",  lambda a, s: s["ram"].percent, 70, 90),
-    (2, 1, "MEM",  "gb",   lambda a, s: s["ram"].used / 1024 ** 3, 0, 0),
-    (2, 2, "NV1",  "temp", lambda a, s: _nvme_temp(s, 0), 70, 80),
-    (2, 3, "NV2",  "temp", lambda a, s: _nvme_temp(s, 1), 70, 80),
-    (2, 4, "NV3",  "temp", lambda a, s: _nvme_temp(s, 2), 70, 80),
-    (2, 5, "PSU",  "w",    lambda a, s: s["psu_w"], PSU_W_WARN, PSU_W_CRIT),
-    (2, 6, "VRM",  "temp", lambda a, s: s["psu_vrm"], 55, 65),
-    (2, 7, "FAN",  "pct",  lambda a, s: s["psu_fan_pct"], 70, 90),
-    # --- Row 3: Linux ---
-    (3, 0, "DSK",   "gb",   lambda a, s: (
+    (2, 0, "TIME", "time", lambda a, s: datetime.now().strftime("%H:%M"), 0, 0),
+    (2, 1, "NV1",  "temp", lambda a, s: _nvme_temp(s, 0), 70, 80),
+    (2, 2, "NV2",  "temp", lambda a, s: _nvme_temp(s, 1), 70, 80),
+    (2, 3, "NV3",  "temp", lambda a, s: _nvme_temp(s, 2), 70, 80),
+    (2, 4, "DSK",  "gb",   lambda a, s: (
         None if s["disk_free"] is None else s["disk_free"] / 1024 ** 3), 0, 0),
-    (3, 1, "DOWN",  "rate", lambda a, s: a.rate(
+    (2, 5, "SWAP", "pct",  lambda a, s: s["swap"].percent, 50, 80),
+    (2, 6, "RAM",  "pct",  lambda a, s: s["ram"].percent, 70, 90),
+    (2, 7, "MEM",  "gb",   lambda a, s: s["ram"].used / 1024 ** 3, 0, 0),
+    # --- Row 3: I/O (0-3), power supply (4-7) ---
+    (3, 0, "DOWN",  "rate", lambda a, s: a.rate(
         "net_rx", s["net_rx"], s["t"]), 0, 0),
-    (3, 2, "UP",    "rate", lambda a, s: a.rate(
+    (3, 1, "UP",    "rate", lambda a, s: a.rate(
         "net_tx", s["net_tx"], s["t"]), 0, 0),
-    (3, 3, "READ",  "rate", lambda a, s: a.rate(
+    (3, 2, "READ",  "rate", lambda a, s: a.rate(
         "disk_r", s["disk_r"], s["t"]), 0, 0),
-    (3, 4, "WRITE", "rate", lambda a, s: a.rate(
+    (3, 3, "WRITE", "rate", lambda a, s: a.rate(
         "disk_w", s["disk_w"], s["t"]), 0, 0),
-    (3, 5, "12V",   "v",    lambda a, s: s["rail12"], 0, 0),
-    (3, 6, "UPT",   "upt",  lambda a, s: time.time() - psutil.boot_time(), 0, 0),
-    (3, 7, "TIME",  "time", lambda a, s: datetime.now().strftime("%H:%M"), 0, 0),
+    (3, 4, "PSU",   "w",    lambda a, s: s["psu_w"], PSU_W_WARN, PSU_W_CRIT),
+    (3, 5, "FAN",   "pct",  lambda a, s: s["psu_fan_pct"], 70, 90),
+    (3, 6, "VRM",   "temp", lambda a, s: s["psu_vrm"], 55, 65),
+    (3, 7, "12V",   "v",    lambda a, s: s["rail12"], 0, 0),
 ]
 
 # Per-key data that is not part of the WIDGETS tuple, keyed by (row, col).
@@ -576,38 +581,71 @@ HISTORY_KEYS = {
     (0, 4),     # CPU PWR
     (1, 1),     # GPU TEMP
     (1, 4),     # GPU PWR
-    (2, 5),     # PSU
-    (3, 1),     # DOWN
-    (3, 2),     # UP
-    (3, 3),     # READ
-    (3, 4),     # WRITE
+    (3, 4),     # PSU
+    (3, 0),     # DOWN
+    (3, 1),     # UP
+    (3, 2),     # READ
+    (3, 3),     # WRITE
 }
 HISTORY_LEN = 40            # samples kept per key (~1 min at 1.5 s)
 
 # Top-right unit, drawn in COL_TITLE at size 11 when it fits next to the label.
 UNITS = {
-    (3, 1): "MB/s",     # DOWN
-    (3, 2): "MB/s",     # UP
-    (3, 3): "MB/s",     # READ
-    (3, 4): "MB/s",     # WRITE
+    (3, 0): "MB/s",     # DOWN
+    (3, 1): "MB/s",     # UP
+    (3, 2): "MB/s",     # READ
+    (3, 3): "MB/s",     # WRITE
 }
 
 # Bottom-zone sub-line: callable(App, sample) -> str | None. None means "draw
 # nothing", which is also the answer for a missing sensor (never a fake total).
 SUBS = {
     # GPU MEM: used / total VRAM, both from the same nvidia-smi sample
-    (1, 3): lambda a, s: (
+    (1, 7): lambda a, s: (
         f"/{s['gpu']['mem_total'] / 1024:.0f}G"
         if s["gpu"] and s["gpu"].get("mem_total") else None),
     # RAM MEM: used / total system RAM, from the psutil virtual_memory sample
-    (2, 1): lambda a, s: (
+    (2, 7): lambda a, s: (
         f"/{s['ram'].total / 1024 ** 3:.0f}G"
         if getattr(s["ram"], "total", None) else None),
     # DSK: free / total on the root filesystem, one statvfs per tick
-    (3, 0): lambda a, s: (
+    (2, 4): lambda a, s: (
         f"/{(s.get('disk_total') or 0) / 1024 ** 3:.0f}G"
         if s.get("disk_total") else None),
 }
+
+
+def _check_layout(widgets, per_key_tables):
+    """Fail loudly if the deck layout is not exactly the 8x4 grid.
+
+    A duplicated or missing (row, col) silently leaves a key stale or dark, and
+    a per-key dict pointing at a cell that no longer exists fails just as
+    quietly - both are cheap to catch here and expensive to notice on the deck.
+    """
+    grid = {(row, col) for row in range(4) for col in range(COLS)}
+    cells = [(row, col) for row, col, *_ in widgets]
+    dupes = sorted({c for c in cells if cells.count(c) > 1})
+    if dupes or set(cells) != grid:
+        raise RuntimeError(
+            f"WIDGETS must cover the 4x{COLS} grid exactly once: "
+            f"duplicates={dupes}, missing={sorted(grid - set(cells))}")
+    for name, table in per_key_tables.items():
+        stray = sorted(set(table) - grid)
+        if stray:
+            raise RuntimeError(
+                f"{name} points at cells outside the grid: {stray}")
+
+
+_check_layout(WIDGETS, {"HISTORY_KEYS": HISTORY_KEYS, "UNITS": UNITS,
+                        "SUBS": SUBS})
+
+
+def print_layout():
+    """Four lines of eight labels in grid order (used by --preview)."""
+    by_cell = {(w[0], w[1]): w[2] for w in WIDGETS}
+    for row in range(4):
+        labels = (f"{by_cell[(row, c)]:<6s}" for c in range(COLS))
+        print("  " + "".join(labels).rstrip())
 
 
 # ---------------- Formatting ----------------
@@ -970,6 +1008,8 @@ def preview():
     """
     out = Path("/tmp/deck_preview")
     out.mkdir(exist_ok=True)
+    print("Layout:")
+    print_layout()
     ram = namedtuple("Ram", "percent used total")
     swap = namedtuple("Swap", "percent")
     s = {
