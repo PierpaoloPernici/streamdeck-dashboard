@@ -107,6 +107,7 @@ def font(size: int) -> ImageFont.ImageFont:
 
 
 COL_BG = (14, 14, 18)
+COL_BG_CRIT = (60, 14, 14)      # background tint once a key is in CRIT state
 COL_TRACK = (42, 42, 53)
 COL_TITLE = (154, 165, 181)
 COL_VALUE = (240, 240, 245)
@@ -509,6 +510,11 @@ def key_color(v, warn, crit):
     return COL_OK
 
 
+# Kinds whose value is compared against crit/warn, and so can tint the key
+# background when the threshold is crossed.
+TINTED_KINDS = ("pct", "temp", "peak", "w")
+
+
 def render_key(label, kind, value, warn=0, crit=0) -> Image.Image:
     """Render a 96x96 key following the graphic rules."""
     sub = None          # small secondary line under the main value
@@ -561,7 +567,13 @@ def render_key(label, kind, value, warn=0, crit=0) -> Image.Image:
     # bottom zone (bar or sub-line) sit a little higher to leave room for it.
     cy = 44 if (ratio is not None or sub is not None) else 54
 
-    img = Image.new("RGB", (KEY_W, KEY_H), COL_BG)
+    # A key that reached its critical threshold gets a dark red background so
+    # the state is visible from across the room, not just from the glyph colour.
+    bg = COL_BG
+    if crit and kind in TINTED_KINDS and value is not None and value >= crit:
+        bg = COL_BG_CRIT
+
+    img = Image.new("RGB", (KEY_W, KEY_H), bg)
     d = ImageDraw.Draw(img)
     d.text((6, 4), label, font=font(14), fill=COL_TITLE)
 

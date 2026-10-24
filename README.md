@@ -27,6 +27,8 @@ ROW 3  LINUX   LOAD | DOWN | UP   | READ|WRITE| 12V  | UPT | TIME
 - `LOAD` shows the 1 min average large, with the 5 min one as a small second line
 - Colored bar **only** on UTIL, VRAM, RAM and FAN %
 - Temperatures: green normal → yellow → red
+- A key that reaches its critical threshold also gets a dark red background
+  tint, so the alarm survives the distance
 - `--` = sensor unavailable at that moment (never a placeholder `0`)
 
 ## Data sources
