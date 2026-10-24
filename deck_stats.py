@@ -23,8 +23,9 @@ Graphic rules:
   - 4-6 char label on top, large centered value, unit inside the value (45° 66W 3.7G)
   - a unit in the top-right corner only for values that carry no unit of their
     own (MB/s rates); it is dropped when it would collide with the label
-  - bar only on UTIL/VRAM/RAM/FAN %  (bottom zone, priority over the others)
-  - a sub-line carries the total (MEM) or the 5 min load (LOAD)
+  - bar only on UTIL/VRAM/RAM/SWAP/FAN %  (bottom zone, priority over the rest)
+  - a sub-line carries the total (MEM, DSK), the 5 min load (LOAD) or the
+    uptime under the clock (TIME)
   - a sparkline carries the last ~1 min of the keys with a free bottom zone
   - temperatures: green normal -> yellow -> red
   - a key at its crit threshold also gets a dark red background tint
@@ -90,6 +91,8 @@ LABEL_SIZE = 14
 UNIT_XY = (90, 14)          # top-right, vertically centred on the label
 UNIT_SIZE = 11
 SUB_CY = 78                 # sub-line centre, bottom zone
+SUB_SIZE = 13               # sub-line font, shrunk per key if it would not fit
+SUB_MAX_W = 84              # sub-line horizontal budget
 BAR_BOX = (6, 78, 90, 90)   # bar, bottom zone
 SPARK_BOX = (6, 70, 90, 90)  # sparkline, bottom zone
 SPARK_MIN_SPAN = 0.01        # min window span, as a fraction of the value
@@ -520,7 +523,7 @@ class App:
 
 # ---------------- Widgets ----------------
 # (row, column, label, kind, getter(App, sample)->value, warn, crit)
-# kind: pct=bar+%, temp, peak, w, ghz, gb, v, rpm, loadpair, rate, time, upt
+# kind: pct=bar+%, temp, peak, w, ghz, gb, v, rpm, loadpair, clock, rate
 
 APP = App()
 
@@ -559,7 +562,9 @@ WIDGETS = [
     (1, 7, "MEM",  "gb",   lambda a, s: (
         (s["gpu"]["mem_used"] / 1024) if s["gpu"] else None), 0, 0),
     # --- Row 2: System ---
-    (2, 0, "TIME", "time", lambda a, s: datetime.now().strftime("%H:%M"), 0, 0),
+    (2, 0, "TIME", "clock", lambda a, s: (
+        datetime.now().strftime("%H:%M"),
+        time.time() - psutil.boot_time()), 0, 0),
     (2, 1, "NV1",  "temp", lambda a, s: _nvme_temp(s, 0), 70, 80),
     (2, 2, "NV2",  "temp", lambda a, s: _nvme_temp(s, 1), 70, 80),
     (2, 3, "NV3",  "temp", lambda a, s: _nvme_temp(s, 2), 70, 80),
@@ -674,14 +679,17 @@ def fmt_rate(bps):
 
 
 def fmt_uptime(sec):
+    """Uptime for the TIME sub-line: 'up 3d 04h', 'up 4h 07m', 'up 12m'."""
+    if sec is None:
+        return None
     d, r = divmod(int(sec), 86400)
     h, r = divmod(r, 3600)
     m = r // 60
     if d:
-        return f"{d}d"
+        return f"up {d}d {h:02d}h"
     if h:
-        return f"{h}h"
-    return f"{m}m"
+        return f"up {h}h {m:02d}m"
+    return f"up {m}m"
 
 
 def key_color(v, warn, crit):
@@ -759,6 +767,13 @@ def render_key(label, kind, value, warn=0, crit=0, row=None, unit=None,
     size_max = 40
     if value is None:
         text, ratio, color = "--", None, COL_OFF
+    elif kind == "clock":
+        # (HH:MM, uptime seconds): the clock leads, the uptime goes underneath
+        clock, up_sec = value
+        text = clock
+        if sub is None:
+            sub = fmt_uptime(up_sec)      # same bottom-zone path as SUBS
+        ratio, color = None, COL_VALUE
     elif kind == "loadpair":
         # (1 min, 5 min): the 1 min value leads, the 5 min one goes underneath
         load1, load5 = value
@@ -792,10 +807,6 @@ def render_key(label, kind, value, warn=0, crit=0, row=None, unit=None,
             text = f"{value:.0f}"
         elif kind == "rate":
             text = fmt_rate(value)
-        elif kind == "time":
-            text = value
-        elif kind == "upt":
-            text = fmt_uptime(value)
         else:
             text = f"{value}"
 
@@ -843,7 +854,11 @@ def render_key(label, kind, value, warn=0, crit=0, row=None, unit=None,
             d.rectangle((BAR_BOX[0], BAR_BOX[1], BAR_BOX[0] + fill_w,
                          BAR_BOX[3]), fill=color)
     elif sub:              # bottom zone: bar wins, then the sub-line
-        d.text((KEY_W / 2, SUB_CY), sub, font=font(13), fill=COL_TITLE,
+        size_sub = SUB_SIZE
+        while (size_sub > 9
+               and d.textlength(sub, font=font(size_sub)) > SUB_MAX_W):
+            size_sub -= 1          # e.g. 'up 999d 23h': shrink this key only
+        d.text((KEY_W / 2, SUB_CY), sub, font=font(size_sub), fill=COL_TITLE,
                anchor="mm")
     elif history is not None and len(history) > 1:
         d.line(spark_points(history), fill=color, width=2, joint="curve")
@@ -1054,10 +1069,8 @@ def preview():
         value = getter(APP, s)
         if kind == "rate":
             value = 1.2e6 if "DOWN" in label or "READ" in label else 45e3
-        if kind == "upt":
-            value = 3 * 86400 + 4 * 3600
-        if kind == "time":
-            value = "08:45"
+        if kind == "clock":
+            value = ("08:45", 3 * 86400 + 4 * 3600)
         history = None
         if (row, col) in HISTORY_KEYS and isinstance(value, (int, float)):
             APP.history[(row, col)].extend(
