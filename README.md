@@ -41,6 +41,9 @@ ROW 3  LINUX   LOAD | DOWN | UP   | READ|WRITE| 12V  | UPT | TIME
   blue = CPU, violet = GPU, cyan = SYSTEM, gray = LINUX. These hues are
   outside the green/amber/red family on purpose, which is reserved for status
 - Temperatures: green normal → yellow → red
+- `LOAD` has no absolute warning level: it is normalised by core count, yellow
+  from 70 % of the cores, red from 100 %. The 5 min average stays a gray sub-line
+- `12V` is coloured by the deviation from 12.00 V: yellow from 5 %, red from 8 %
 - A key that reaches its critical threshold also gets a dark red background
   tint, so the alarm survives the distance
 - `--` = sensor unavailable at that moment (never a placeholder `0`)

@@ -155,6 +155,15 @@ PSU_POWER_MAX = _env_num("DECK_PSU_POWER_MAX", 650.0)
 GPU_W_WARN, GPU_W_CRIT = GPU_POWER_MAX * 0.65, GPU_POWER_MAX * 0.90
 PSU_W_WARN, PSU_W_CRIT = PSU_POWER_MAX * 0.70, PSU_POWER_MAX * 0.92
 
+# LOAD has no absolute thresholds: one process queueing is "full" on a 2-core
+# box and nothing on a 32-thread one, so it is normalised by the core count.
+CPU_COUNT = psutil.cpu_count() or 1
+LOAD_WARN_RATIO, LOAD_CRIT_RATIO = 0.70, 1.00
+
+# 12 V rail: deviation from nominal, in percent (ATX tolerance is +-5 %).
+RAIL12_NOMINAL = 12.0
+RAIL12_WARN_PCT, RAIL12_CRIT_PCT = 5.0, 8.0
+
 SECTOR = 512        # bytes per sector in /proc/diskstats
 
 
@@ -583,6 +592,28 @@ def key_color(v, warn, crit):
     return COL_OK
 
 
+def ratio_color(ratio, warn, crit):
+    """key_color() for a normalised ratio, with fixed non-zero thresholds."""
+    if ratio is None:
+        return COL_OFF
+    return key_color(ratio, warn, crit)
+
+
+def load_color(value):
+    """LOAD colour from load / core count (warn >= 70 %, crit >= 100 %)."""
+    if value is None:
+        return COL_OFF
+    return ratio_color(value / CPU_COUNT, LOAD_WARN_RATIO, LOAD_CRIT_RATIO)
+
+
+def rail_color(value):
+    """12 V colour from the relative deviation from 12.00 V."""
+    if value is None:
+        return COL_OFF
+    dev_pct = abs(value - RAIL12_NOMINAL) / RAIL12_NOMINAL * 100.0
+    return ratio_color(dev_pct, RAIL12_WARN_PCT, RAIL12_CRIT_PCT)
+
+
 # Kinds whose value is compared against crit/warn, and so can tint the key
 # background when the threshold is crossed.
 TINTED_KINDS = ("pct", "temp", "peak", "w")
@@ -632,7 +663,7 @@ def render_key(label, kind, value, warn=0, crit=0, row=None, unit=None,
         text = "--" if load1 is None else f"{load1:.2f}"
         if sub is None and load5 is not None:
             sub = f"5m {load5:.2f}"       # same bottom-zone path as SUBS
-        ratio, color = None, COL_VALUE
+        ratio, color = None, load_color(load1)
         size_max = 34
     else:
         ratio = None
@@ -654,10 +685,12 @@ def render_key(label, kind, value, warn=0, crit=0, row=None, unit=None,
             text = f"{value:.1f}G"
         elif kind == "v":
             text = f"{value:.1f}V"
+            color = rail_color(value)
         elif kind == "rpm":
             text = f"{value:.0f}"
         elif kind == "load":
             text = f"{value:.2f}"
+            color = load_color(value)
         elif kind == "rate":
             text = fmt_rate(value)
         elif kind == "count":
