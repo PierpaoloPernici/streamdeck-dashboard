@@ -4,7 +4,7 @@
   Row 0  CPU    UTIL | TEMP | CCD1 | CLK | PWR | LOAD | MAX | PROC
   Row 1  GPU    UTIL | TEMP | VRAM | MEM | PWR | FAN  | CLK | MAX
   Row 2  SYSTEM RAM  | MEM  | NV1  | NV2 | NV3 | PSU | VRM  | FAN
-  Row 3  LINUX  LOAD | DOWN | UP   | READ|WRITE| UPT  | TIME| 12V
+  Row 3  LINUX  LOAD | DOWN | UP   | READ|WRITE| 12V | UPT | TIME
 
 Graphic rules:
   - 4-6 char label on top, large centered value, unit inside the value (45° 66W 3.7G)
@@ -459,9 +459,9 @@ WIDGETS = [
         "disk_r", s["disk_r"], s["t"]), 0, 0),
     (3, 4, "WRITE", "rate", lambda a, s: a.rate(
         "disk_w", s["disk_w"], s["t"]), 0, 0),
-    (3, 5, "UPT",   "upt",  lambda a, s: time.monotonic(), 0, 0),
-    (3, 6, "TIME",  "time", lambda a, s: datetime.now().strftime("%H:%M"), 0, 0),
-    (3, 7, "12V",   "v",    lambda a, s: s["rail12"], 0, 0),
+    (3, 5, "12V",   "v",    lambda a, s: s["rail12"], 0, 0),
+    (3, 6, "UPT",   "upt",  lambda a, s: time.monotonic(), 0, 0),
+    (3, 7, "TIME",  "time", lambda a, s: datetime.now().strftime("%H:%M"), 0, 0),
 ]
 
 

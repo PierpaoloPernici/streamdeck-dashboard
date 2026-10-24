@@ -14,7 +14,7 @@ hwmon and `nvidia-smi`.
 ROW 0  CPU     UTIL | TEMP | CCD1 | CLK | PWR | LOAD | MAX | PROC
 ROW 1  GPU     UTIL | TEMP | VRAM | MEM | PWR | FAN  | CLK | MAX
 ROW 2  SYSTEM  RAM  | MEM  | NV1  | NV2 | NV3 | PSU  | VRM | FAN
-ROW 3  LINUX   LOAD | DOWN | UP   | READ|WRITE| UPT  |TIME | 12V
+ROW 3  LINUX   LOAD | DOWN | UP   | READ|WRITE| 12V  | UPT | TIME
 ```
 
 ## Graphic rules
