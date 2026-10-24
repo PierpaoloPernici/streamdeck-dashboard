@@ -109,6 +109,44 @@ Corsair PSU); other hardware works, some keys fall back:
 | CPU 12V | vcore | vcore not exposed → **PSU 12V rail** |
 | GPU MAX | hotspot | hotspot not exposed by `nvidia-smi` → rolling peak of GPU temp |
 
+## Related projects
+
+Similar open-source work is rare and mostly split in two camps: **standalone**
+apps that talk to the device themselves (like this one), and **plugins** that
+need a host — the Elgato Stream Deck app, or [OpenDeck](https://github.com/nekename/OpenDeck)
+on Linux. Standalone, closest in approach:
+
+| Project | Lang | Platform | Notes |
+|---|---|---|---|
+| [ZoutMax/FifineControlDeck](https://github.com/ZoutMax/FifineControlDeck) | Python / PyQt6 | Linux | for the fifine "Stream Dock" clone (USB `3142:0060`), not an Elgato; keys for CPU, RAM, VRAM, GPU load/temps, network, disk space |
+| [LabRaTox/Deck-Switch](https://github.com/LabRaTox/Deck-Switch) | Python / PyQt6 | Linux | real Stream Deck hardware, own plugin system with a built-in *system* plugin |
+| [SmokeyMcBong/StreamDeckMonitor](https://github.com/SmokeyMcBong/StreamDeckMonitor) | C# / .NET | Windows | background console app, CPU/GPU/FPS via MSI Afterburner + StreamDeckSharp |
+
+Plugins (they need the vendor app or OpenDeck running):
+
+| Project | Lang | Platform | Notes |
+|---|---|---|---|
+| [kahikara/opendeck-redline-monitor](https://github.com/kahikara/opendeck-redline-monitor) | JavaScript | Linux (OpenDeck) | richest metric set, keys **and** encoders, sysfs-first |
+| [moeilijk/lhm-streamdeck](https://github.com/moeilijk/lhm-streamdeck) + [lhm-companion](https://github.com/moeilijk/lhm-companion) | JavaScript / Go | Linux, Windows | sensor data served in LibreHardwareMonitor's `data.json` format |
+| [Yoshiofthewire/agentglass-streamdeck](https://github.com/Yoshiofthewire/agentglass-streamdeck) | TypeScript | Linux (OpenDeck) | sysfs every tick, `nvidia-smi` every 15 s |
+| [ShoMetrics/sho_metrics](https://github.com/ShoMetrics/sho_metrics) | TypeScript | Windows, macOS | Marketplace plugin, includes custom HTTP JSON endpoints |
+
+Related but not a Stream Deck: [LabRaTox/EdgeDisplayWidgets](https://github.com/LabRaTox/EdgeDisplayWidgets)
+("Edge Dashboard") drives a Corsair Xeneon Edge 14.5" second display from
+`/sys/class/hwmon` and NVML through a FastAPI + QML kiosk.
+
+Commercial equivalents on the Elgato Marketplace: *Metrics*, *System Vitals*,
+*HWiNFO*.
+
+How this project differs from the options above:
+
+- **No host app at all.** Direct hidapi via `python-elgato-streamdeck`, one
+  process, no Elgato/OpenDeck install and no cloud account.
+- **Deep hardware access on Linux.** CPU package power from RAPL, PSU
+  telemetry from the `corsairpsu` hwmon (VRM temperature, 12 V rail, fan),
+  NVMe hwmon temperatures — none of the projects above expose these.
+- **Whole 32-key frame** refreshed at a fixed rate from `time.monotonic()`.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
