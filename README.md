@@ -143,6 +143,10 @@ journalctl --user -u deck-stats -f         # live logs
   which would silently swap the drive behind a label. Extra drives are reported
   on the startup log line (`Sensors: {...}`); SATA disks expose no temperature
   unless the `drivetemp` module is loaded (they are not read yet).
+- `nvme_temps` keeps one slot per controller, `None` when a drive is not
+  reporting. Dropping unavailable readings from the list would shift the later
+  drives onto the previous labels and show a temperature for the wrong disk;
+  with a fixed slot the silent drive shows `--` and the others stay put.
 - In the GPU row, an `nvidia-smi` field the driver cannot read (`[N/A]`,
   `[Not Supported]`) is a missing value, not a read failure: that key shows
   `--`, the rest of the row stays live and nothing is logged every tick. Only

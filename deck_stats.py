@@ -450,9 +450,11 @@ class App:
             "ccd1_temp": hwmon_scaled(CPUTEMP, "temp3_input", 1000),  # Tccd1
             "cpu_clk": self._cpu_clk(),
             "gpu": gpu_read(),
-            "nvme_temps": [v for v in
-                           (hwmon_scaled(n, "temp1_input", 1000) for n in NVMES)
-                           if v is not None],
+            # one slot per drive, None when that drive is not reporting: keeps
+            # every temperature aligned with its controller instead of shifting
+            # the whole list when a sensor goes away
+            "nvme_temps": [hwmon_scaled(n, "temp1_input", 1000)
+                           for n in NVMES],
             "psu_w": hwmon_scaled(CORSAIR, "power1_input", 1e6),
             "psu_vrm": hwmon_scaled(CORSAIR, "temp1_input", 1000),
             "psu_fan_pct": hwmon_value(CORSAIR, "pwm1"),
@@ -552,7 +554,7 @@ APP = App()
 _STOP = False
 
 def _nvme_temp(s, index):
-    """Temperature of the index-th NVMe drive, or None when absent."""
+    """Temperature of the index-th NVMe drive, None when it has no reading."""
     temps = s["nvme_temps"]
     return temps[index] if len(temps) > index else None
 
