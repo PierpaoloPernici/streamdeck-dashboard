@@ -33,7 +33,7 @@ ROW 3  LINUX   LOAD | DOWN | UP   | READ|WRITE| 12V  | UPT | TIME
 | CPU | `psutil` (load), `k10temp` or `coretemp` hwmon (Tctl/CCD1), RAPL (power), cpufreq (clock) |
 | GPU | `nvidia-smi` (util, temp, VRAM, power, fan, clock) |
 | System | RAM/CPU load, up to 3 NVMe hwmon temperatures (NV1–NV3), `corsairpsu` hwmon *(optional: power, VRM, fan, 12 V rail)* |
-| Linux | `/proc/loadavg`, `/proc/net/dev`, `/proc/diskstats`, `psutil.pids()`, clock |
+| Linux | `/proc/loadavg`, `/proc/net/dev`, `/proc/diskstats`, `psutil.pids()`, `psutil.boot_time()` (uptime, suspend-aware), clock |
 
 Everything is auto-detected: the CPU temperature chip, the RAPL package
 domain, the NVMe drives and the PSU are looked up at startup and reported on

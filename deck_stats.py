@@ -460,7 +460,7 @@ WIDGETS = [
     (3, 4, "WRITE", "rate", lambda a, s: a.rate(
         "disk_w", s["disk_w"], s["t"]), 0, 0),
     (3, 5, "12V",   "v",    lambda a, s: s["rail12"], 0, 0),
-    (3, 6, "UPT",   "upt",  lambda a, s: time.monotonic(), 0, 0),
+    (3, 6, "UPT",   "upt",  lambda a, s: time.time() - psutil.boot_time(), 0, 0),
     (3, 7, "TIME",  "time", lambda a, s: datetime.now().strftime("%H:%M"), 0, 0),
 ]
 
