@@ -143,6 +143,11 @@ journalctl --user -u deck-stats -f         # live logs
   which would silently swap the drive behind a label. Extra drives are reported
   on the startup log line (`Sensors: {...}`); SATA disks expose no temperature
   unless the `drivetemp` module is loaded (they are not read yet).
+- In the GPU row, an `nvidia-smi` field the driver cannot read (`[N/A]`,
+  `[Not Supported]`) is a missing value, not a read failure: that key shows
+  `--`, the rest of the row stays live and nothing is logged every tick. Only
+  a read that genuinely failed (timeout, missing binary, short CSV row) blanks
+  the whole GPU block.
 - If the deck is unplugged the script reconnects automatically; on exit
   (Ctrl-C or SIGTERM from systemd) it blanks the keys instead of leaving stale
   numbers lit.

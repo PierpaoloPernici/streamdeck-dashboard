@@ -311,8 +311,27 @@ def _core_max():
     return max(per_cpu) if per_cpu else None
 
 
+def _f(x):
+    """float() for one nvidia-smi field, None when the field is unavailable.
+
+    Even with csv,noheader,nounits nvidia-smi prints fields it cannot read in
+    brackets: [N/A], [Not Supported], [Unknown Platform]... Anything that does
+    not parse is treated as missing, so only its own key goes blank instead of
+    taking the whole GPU block down with it.
+    """
+    try:
+        return float(x)
+    except ValueError:
+        return None
+
+
 def gpu_read():
-    """GPU data from nvidia-smi (single call ~50ms)."""
+    """GPU data from nvidia-smi (single call ~50ms).
+
+    Only the individual fields are forgiving: a read that genuinely failed
+    (timeout, binary missing, short row) still raises into the except below
+    and returns None, which is the right signal to blank every GPU key.
+    """
     try:
         out = subprocess.run(
             ["nvidia-smi",
@@ -322,10 +341,11 @@ def gpu_read():
             capture_output=True, text=True, timeout=3,
         ).stdout
         t, u, f, p, mu, mt, clk = (x.strip() for x in out.split(","))
+        clk_mhz = _f(clk)
         return {
-            "temp": float(t), "util": float(u), "fan": float(f),
-            "power": float(p), "mem_used": float(mu), "mem_total": float(mt),
-            "clk": float(clk) / 1000.0,          # MHz -> GHz
+            "temp": _f(t), "util": _f(u), "fan": _f(f),
+            "power": _f(p), "mem_used": _f(mu), "mem_total": _f(mt),
+            "clk": None if clk_mhz is None else clk_mhz / 1000.0,  # MHz -> GHz
         }
     except Exception as e:
         print(f"[gpu] read error: {e}", file=sys.stderr)
@@ -559,9 +579,11 @@ WIDGETS = [
     (1, 5, "FAN",  "pct",  lambda a, s: (s["gpu"] or {}).get("fan"), 70, 90),
     (1, 6, "VRAM", "pct",  lambda a, s: (
         (s["gpu"]["mem_used"] / s["gpu"]["mem_total"] * 100)
-        if s["gpu"] and s["gpu"].get("mem_total") else None), 75, 90),
+        if (s["gpu"] and s["gpu"].get("mem_used") is not None
+            and s["gpu"].get("mem_total")) else None), 75, 90),
     (1, 7, "MEM",  "gb",   lambda a, s: (
-        (s["gpu"]["mem_used"] / 1024) if s["gpu"] else None), 0, 0),
+        (s["gpu"]["mem_used"] / 1024)
+        if s["gpu"] and s["gpu"].get("mem_used") is not None else None), 0, 0),
     # --- Row 2: System ---
     (2, 0, "TIME", "clock", lambda a, s: (
         datetime.now().strftime("%H:%M"),
