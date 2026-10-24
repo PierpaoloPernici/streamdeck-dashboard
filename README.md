@@ -11,7 +11,7 @@ hwmon and `nvidia-smi`.
 ## Layout
 
 ```
-ROW 0  CPU     UTIL | TEMP | CCD1 | CLK | PWR | LOAD | MAX | SWAP
+ROW 0  CPU     UTIL | TEMP | CCD2 | CLK | PWR | LOAD | MAX | SWAP
 ROW 1  GPU     UTIL | TEMP | VRAM | MEM | PWR | FAN  | CLK | MAX
 ROW 2  SYSTEM  RAM  | MEM  | NV1  | NV2 | NV3 | PSU  | VRM | FAN
 ROW 3  LINUX   DSK  | DOWN | UP   | READ|WRITE| 12V  | UPT | TIME
