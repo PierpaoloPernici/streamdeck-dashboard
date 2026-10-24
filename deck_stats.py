@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stream Deck 8x4 dashboard (final layout).
 
-  Row 0  CPU    UTIL | TEMP | MAX  | CLK | PWR | LOAD | CCD1 | CCD2
+  Row 0  CPU    UTIL | TEMP | MAX  | CLK | PWR | LOAD | CCD1 | CORE
   Row 1  GPU    UTIL | TEMP | MAX  | CLK | PWR | FAN  | VRAM | MEM
   Row 2  SYSTEM TIME | NV1  | NV2  | NV3 | DSK | SWAP | RAM  | MEM
   Row 3  I/O+PSU DOWN| UP   | READ |WRITE| PSU | FAN  | VRM  | 12V
@@ -297,30 +297,18 @@ CORSAIR = find_hwmon("corsairpsu", "corsair-psu")
 RAPL, RAPL_RANGE = find_rapl()
 
 
-def find_temp_attr(hwmon_dir, label: str):
-    """`tempN_input` attribute whose `tempN_label` is `label`, or None.
+def _core_max():
+    """Load of the busiest logical CPU, in percent, or None.
 
-    hwmon attribute numbers are per driver and per chip: Tccd2 is temp4_input on
-    most k10temp revisions but not on all of them, so the label is the only
-    stable handle. Resolved once at import, never per tick.
+    psutil keeps a separate baseline for percpu=True, so this is one call per
+    tick (see run(), which calibrates both). One saturated thread is normal, so
+    the key is amber from 90 % and deliberately never red.
     """
-    if hwmon_dir is None:
+    try:
+        per_cpu = psutil.cpu_percent(percpu=True)
+    except Exception:
         return None
-    for path in sorted(hwmon_dir.glob("temp*_label")):
-        try:
-            if path.read_text().strip() != label:
-                continue
-        except OSError:              # device vanished: try the next one
-            continue
-        attr = path.name[:-len("_label")] + "_input"
-        if (hwmon_dir / attr).exists():
-            return attr
-    return None
-
-
-# Second CCD temperature, when the CPU has one: nothing to fall back to, so the
-# key renders '--' on single-CCD parts (and on Intel) instead of a copy of CCD1.
-CCD2_ATTR = find_temp_attr(CPUTEMP, "Tccd2")
+    return max(per_cpu) if per_cpu else None
 
 
 def gpu_read():
@@ -437,10 +425,9 @@ class App:
         s = {
             "t": t,
             "cpu_pct": psutil.cpu_percent(None),
+            "cpu_core_max": _core_max(),
             "cpu_temp": hwmon_scaled(CPUTEMP, "temp1_input", 1000),   # Tctl
             "ccd1_temp": hwmon_scaled(CPUTEMP, "temp3_input", 1000),  # Tccd1
-            "ccd2_temp": (hwmon_scaled(CPUTEMP, CCD2_ATTR, 1000)
-                          if CCD2_ATTR else None),                 # Tccd2
             "cpu_clk": self._cpu_clk(),
             "gpu": gpu_read(),
             "nvme_temps": [v for v in
@@ -560,7 +547,7 @@ WIDGETS = [
     (0, 4, "PWR",  "w",    lambda a, s: a.cpu_pwr(s), 0, 0),
     (0, 5, "LOAD", "loadpair", lambda a, s: tuple(s["load"]), 0, 0),
     (0, 6, "CCD1", "temp", lambda a, s: s["ccd1_temp"], 75, 90),
-    (0, 7, "CCD2", "temp", lambda a, s: s["ccd2_temp"], 75, 90),
+    (0, 7, "CORE", "pct", lambda a, s: s["cpu_core_max"], 90, 101),
     # --- Row 1: GPU ---
     (1, 0, "UTIL", "pct",  lambda a, s: (s["gpu"] or {}).get("util"), 60, 85),
     (1, 1, "TEMP", "temp", lambda a, s: (s["gpu"] or {}).get("temp"), 75, 85),
@@ -888,6 +875,7 @@ def run(deck):
     deck.set_brightness(BRIGHTNESS)
     print(f"Connected: {deck.deck_type()} (serial {deck.get_serial_number()})")
     psutil.cpu_percent(None)  # calibrate the first sample
+    psutil.cpu_percent(None, percpu=True)  # separate baseline for CORE
 
     next_tick = time.monotonic()
     try:
@@ -965,7 +953,6 @@ def main():
     manager = DeviceManager()
     print("Sensors:", {
         "cpu_temp": hwmon_name(CPUTEMP),
-        "ccd2": CCD2_ATTR,
         "nvme": [hwmon_controller(h) or h.name for h in NVMES],
         "psu": hwmon_name(CORSAIR),
         "rapl": RAPL is not None,
@@ -1057,7 +1044,7 @@ def preview():
     swap = namedtuple("Swap", "percent")
     s = {
         "t": time.monotonic(),
-        "cpu_pct": 57, "cpu_temp": 61.2, "ccd1_temp": 49.0, "ccd2_temp": 55.0,
+        "cpu_pct": 57, "cpu_core_max": 93, "cpu_temp": 61.2, "ccd1_temp": 49.0,
         "cpu_clk": 5.24,
         "gpu": {"temp": 68.0, "util": 94, "fan": 55, "power": 412.0,
                 "mem_used": 28950.0, "mem_total": 32607.0, "clk": 2.86},
