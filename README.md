@@ -52,7 +52,7 @@ ROW 3  LINUX   LOAD | DOWN | UP   | READ|WRITE| 12V  | UPT | TIME
 
 | Group | Sources |
 |---|---|
-| CPU | `psutil` (load), `k10temp` or `coretemp` hwmon (Tctl/CCD1), RAPL (power), cpufreq (clock) |
+| CPU | `psutil` (load), `k10temp` or `coretemp` hwmon (Tctl/CCD1), RAPL (power), cpufreq (max core clock) |
 | GPU | `nvidia-smi` (util, temp, VRAM, power, fan, clock) |
 | System | RAM/CPU load, up to 3 NVMe hwmon temperatures (NV1–NV3), `corsairpsu` hwmon *(optional: power, VRM, fan, 12 V rail)* |
 | Linux | `/proc/loadavg`, `/proc/net/dev`, `/proc/diskstats`, `psutil.pids()`, `psutil.boot_time()` (uptime, suspend-aware), clock |
@@ -108,6 +108,8 @@ journalctl --user -u deck-stats -f         # live logs
 
 - Fixed-rate loop: the interval is measured with `time.monotonic()`, so slow
   ticks do not accumulate drift. `nvidia-smi` costs ~50 ms per tick.
+- `CLK` is the highest current core clock across all cores (`scaling_cur_freq`),
+  not `cpu0`: the sampler's own core is a poor proxy for boost.
 - `MAX` is a rolling peak over `DECK_PEAK_WINDOW`, not an all-time maximum, so
   an old spike does not pin the key forever.
 - Rates (DOWN/UP/READ/WRITE) start from the second tick (the first one samples

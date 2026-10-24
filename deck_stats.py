@@ -348,6 +348,12 @@ def _disk_io():
     return read, write
 
 
+# All per-core cpufreq counters, globbed once: the set does not change while
+# the machine runs, and globbing every tick would cost more than the reads.
+CPU_FREQ_FILES = sorted(
+    Path("/sys/devices/system/cpu").glob("cpu[0-9]*/cpufreq/scaling_cur_freq"))
+
+
 class App:
     """Keeps state between samples (peaks, rates, RAPL)."""
 
@@ -393,12 +399,21 @@ class App:
 
     @staticmethod
     def _cpu_clk():
-        try:
-            return int(Path(
-                "/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq"
-            ).read_text()) / 1e6  # kHz -> GHz
-        except (OSError, ValueError):
-            return None
+        """Highest current core clock, in GHz.
+
+        Reading only cpu0 reported the core that happened to run the sampler and
+        missed boost on the others; the max over all cores is what "CLK" means
+        on a dashboard. Unreadable counters are skipped, None if none is left.
+        """
+        best = None
+        for path in CPU_FREQ_FILES:
+            try:
+                khz = int(path.read_text())
+            except (OSError, ValueError):
+                continue
+            if best is None or khz > best:
+                best = khz
+        return None if best is None else best / 1e6      # kHz -> GHz
 
     def cpu_pwr(self, s):
         """CPU package power from RAPL.
