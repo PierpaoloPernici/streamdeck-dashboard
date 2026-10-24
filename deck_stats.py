@@ -357,6 +357,19 @@ CPU_FREQ_FILES = sorted(
     Path("/sys/devices/system/cpu").glob("cpu[0-9]*/cpufreq/scaling_cur_freq"))
 
 
+def _disk_usage(path: str = "/"):
+    """(bytes free for the user, filesystem size) of a mount point.
+
+    f_bavail, not f_bfree: the reserve root keeps for itself is not space a
+    dashboard should advertise as available.
+    """
+    try:
+        st = os.statvfs(path)
+    except OSError:
+        return None, None
+    return st.f_bavail * st.f_frsize, st.f_blocks * st.f_frsize
+
+
 class App:
     """Keeps state between samples (peaks, rates, RAPL)."""
 
@@ -395,6 +408,7 @@ class App:
         }
         s["net_rx"], s["net_tx"] = _net_io()
         s["disk_r"], s["disk_w"] = _disk_io()
+        s["disk_free"], s["disk_total"] = _disk_usage()
         # kept for cpu_pwr()'s PSU - GPU fallback
         self.psu_w_last = s["psu_w"]
         self.gpu_power_last = (s["gpu"] or {}).get("power")
@@ -474,7 +488,7 @@ class App:
 
 # ---------------- Widgets ----------------
 # (row, column, label, kind, getter(App, sample)->value, warn, crit)
-# kind: pct=bar+%, temp, peak, w, ghz, gb, v, rpm, load, rate, count, time, upt
+# kind: pct=bar+%, temp, peak, w, ghz, gb, v, rpm, loadpair, rate, count, time, upt
 
 APP = App()
 
@@ -494,7 +508,7 @@ WIDGETS = [
     (0, 2, "CCD1", "temp", lambda a, s: s["ccd1_temp"], 75, 90),
     (0, 3, "CLK",  "ghz",  lambda a, s: s["cpu_clk"], 0, 0),
     (0, 4, "PWR",  "w",    lambda a, s: a.cpu_pwr(s), 0, 0),
-    (0, 5, "LOAD", "load", lambda a, s: s["load"][0], 0, 0),
+    (0, 5, "LOAD", "loadpair", lambda a, s: tuple(s["load"]), 0, 0),
     (0, 6, "MAX",  "peak", lambda a, s: a.peak("cpu", s["cpu_temp"], s["t"]),
      75, 90),
     (0, 7, "PROC", "count", lambda a, s: s["proc"], 0, 0),
@@ -522,7 +536,8 @@ WIDGETS = [
     (2, 6, "VRM",  "temp", lambda a, s: s["psu_vrm"], 55, 65),
     (2, 7, "FAN",  "pct",  lambda a, s: s["psu_fan_pct"], 70, 90),
     # --- Row 3: Linux ---
-    (3, 0, "LOAD",  "loadpair", lambda a, s: tuple(s["load"]), 0, 0),
+    (3, 0, "DSK",   "gb",   lambda a, s: (
+        None if s["disk_free"] is None else s["disk_free"] / 1024 ** 3), 0, 0),
     (3, 1, "DOWN",  "rate", lambda a, s: a.rate(
         "net_rx", s["net_rx"], s["t"]), 0, 0),
     (3, 2, "UP",    "rate", lambda a, s: a.rate(
@@ -572,6 +587,10 @@ SUBS = {
     (2, 1): lambda a, s: (
         f"/{s['ram'].total / 1024 ** 3:.0f}G"
         if getattr(s["ram"], "total", None) else None),
+    # DSK: free / total on the root filesystem, one statvfs per tick
+    (3, 0): lambda a, s: (
+        f"/{(s.get('disk_total') or 0) / 1024 ** 3:.0f}G"
+        if s.get("disk_total") else None),
 }
 
 
@@ -682,7 +701,7 @@ def render_key(label, kind, value, warn=0, crit=0, row=None, unit=None,
         if sub is None and load5 is not None:
             sub = f"5m {load5:.2f}"       # same bottom-zone path as SUBS
         ratio, color = None, load_color(load1)
-        size_max = 34
+        size_max = 36          # two decimals: a little smaller than "412W"
     else:
         ratio = None
         color = COL_VALUE
@@ -706,9 +725,6 @@ def render_key(label, kind, value, warn=0, crit=0, row=None, unit=None,
             color = rail_color(value)
         elif kind == "rpm":
             text = f"{value:.0f}"
-        elif kind == "load":
-            text = f"{value:.2f}"
-            color = load_color(value)
         elif kind == "rate":
             text = fmt_rate(value)
         elif kind == "count":
@@ -952,6 +968,7 @@ def preview():
         "ram": ram(percent=46, used=12.4 * 1024 ** 3, total=32 * 1024 ** 3),
         "load": [0.76, 0.55], "proc": 301,
         "net_rx": 0, "net_tx": 0, "disk_r": 0, "disk_w": 0,
+        "disk_free": 842.1 * 1024 ** 3, "disk_total": 1863 * 1024 ** 3,
     }
     APP.st["peaks"].clear()
     APP.st["net_rx"] = (0, s["t"])
