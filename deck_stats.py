@@ -13,7 +13,7 @@ PSU FAN under the GPU FAN. Row 3 is I/O on the left, power supply on the right.
 Key layout (96x96 px):
 
   +-----------------+
-  |#################|  3 px row accent strip (see ROW_ACCENT)
+  |#################|  3 px group accent strip (see ACCENTS)
   | LABEL      UNIT |  label top-left, optional unit top-right (right of x=90)
   |      VALUE      |  large value, optically centred
   |      bottom     |  exactly one of: bar | sub-line | sparkline
@@ -149,15 +149,29 @@ COL_OK = (61, 220, 132)
 COL_WARN = (255, 179, 64)
 COL_CRIT = (255, 82, 82)
 
-# One accent color per row, drawn as a 3 px strip on the top edge of every key
-# so the four groups stay recognisable at a glance. Deliberately outside the
+# One accent color per group, drawn as a 3 px strip on the top edge of every
+# key so the groups stay recognisable at a glance. Deliberately outside the
 # green/amber/red family, which is reserved for status.
-ROW_ACCENT = {
-    0: (72, 132, 214),      # CPU     blue
-    1: (150, 108, 220),     # GPU     violet
-    2: (56, 170, 190),      # SYSTEM  cyan
-    3: (128, 128, 138),     # LINUX   gray
-}
+CPU_ACCENT = (72, 132, 214)        # blue
+GPU_ACCENT = (150, 108, 220)       # violet
+SYSTEM_ACCENT = (56, 170, 190)     # cyan
+GRAY_ACCENT = (128, 128, 138)      # neutral: the clock and the I/O keys
+POWER_ACCENT = (240, 120, 190)     # pink: the power-supply half of row 3
+
+
+# Row 3 holds two groups, so the accent is a per-key table, not a per-row one.
+def _accent_map():
+    accents = {}
+    for col in range(COLS):
+        accents[(0, col)] = CPU_ACCENT
+        accents[(1, col)] = GPU_ACCENT
+        accents[(2, col)] = SYSTEM_ACCENT
+        accents[(3, col)] = POWER_ACCENT if col >= 4 else GRAY_ACCENT
+    accents[(2, 0)] = GRAY_ACCENT      # TIME is a clock, not a system metric
+    return accents
+
+
+ACCENTS = _accent_map()
 
 # Power thresholds are derived from the machine's own limits (see env vars).
 GPU_POWER_MAX = _env_num("DECK_GPU_POWER_MAX", 550.0)
@@ -756,11 +770,11 @@ def spark_points(values, box=SPARK_BOX):
             for i, v in enumerate(values)]
 
 
-def render_key(label, kind, value, warn=0, crit=0, row=None, unit=None,
+def render_key(label, kind, value, warn=0, crit=0, cell=None, unit=None,
                sub=None, history=None) -> Image.Image:
     """Render a 96x96 key following the graphic rules.
 
-    row/unit/sub/history come from the per-key dicts (ROW_ACCENT, UNITS, SUBS,
+    cell/unit/sub/history come from the per-key dicts (ACCENTS, UNITS, SUBS,
     App.history) and are all optional: without them the key falls back to the
     plain label + value layout.
     """
@@ -823,8 +837,9 @@ def render_key(label, kind, value, warn=0, crit=0, row=None, unit=None,
 
     img = Image.new("RGB", (KEY_W, KEY_H), bg)
     d = ImageDraw.Draw(img)
-    if row is not None:
-        d.rectangle((0, 0, KEY_W, 2), fill=ROW_ACCENT[row])   # 3 px row accent
+    accent = ACCENTS.get(cell)
+    if accent is not None:
+        d.rectangle((0, 0, KEY_W, 2), fill=accent)   # 3 px group accent
     f_label = font(LABEL_SIZE)
     d.text(LABEL_XY, label, font=f_label, fill=COL_TITLE)
 
@@ -889,7 +904,8 @@ def run(deck):
                     if isinstance(value, (int, float)):
                         APP.history[(row, col)].append(float(value))
                     history = APP.history[(row, col)]
-                img = render_key(label, kind, value, warn, crit, row=row,
+                img = render_key(label, kind, value, warn, crit,
+                                 cell=(row, col),
                                  unit=UNITS.get((row, col)),
                                  sub=resolve_sub(row, col, s),
                                  history=history)
@@ -1076,7 +1092,7 @@ def preview():
             APP.history[(row, col)].extend(
                 demo_history(value, row * COLS + col))
             history = APP.history[(row, col)]
-        img = render_key(label, kind, value, warn, crit, row=row,
+        img = render_key(label, kind, value, warn, crit, cell=(row, col),
                          unit=UNITS.get((row, col)),
                          sub=resolve_sub(row, col, s),
                          history=history)
