@@ -17,6 +17,10 @@ ROW 2  SYSTEM  RAM  | MEM  | NV1  | NV2 | NV3 | PSU  | VRM | FAN
 ROW 3  LINUX   DSK  | DOWN | UP   | READ|WRITE| 12V  | UPT | TIME
 ```
 
+The CCD key is `CCD2` when the CPU exposes a second CCD (`temp4_input` on
+`k10temp`), `CCD1` otherwise: on a dual-CCD Ryzen 9, CCD1 is nearly a copy of
+`TEMP` (Tctl), while CCD2 is the half nobody watches.
+
 ## Graphic rules
 
 - 4–6 char label on top, small; large centered value
@@ -57,7 +61,7 @@ ROW 3  LINUX   DSK  | DOWN | UP   | READ|WRITE| 12V  | UPT | TIME
 
 | Group | Sources |
 |---|---|
-| CPU | `psutil` (load), `k10temp` or `coretemp` hwmon (Tctl/CCD1), RAPL (power), cpufreq (max core clock) |
+| CPU | `psutil` (load), `k10temp` or `coretemp` hwmon (Tctl/CCD2), RAPL (power), cpufreq (max core clock) |
 | GPU | `nvidia-smi` (util, temp, VRAM, power, fan, clock) |
 | System | RAM/swap (`psutil.virtual_memory`, `psutil.swap_memory`), up to 3 NVMe hwmon temperatures (NV1–NV3), `corsairpsu` hwmon *(optional: power, VRM, fan, 12 V rail)* |
 | Linux | `/proc/loadavg`, `/proc/net/dev`, `/proc/diskstats`, `os.statvfs("/")` (DSK: free space), `psutil.boot_time()` (uptime, suspend-aware), clock |
@@ -140,6 +144,7 @@ Corsair PSU); other hardware works, some keys fall back:
 | Key | Intended | Fallback when unavailable |
 |---|---|---|
 | CPU PWR | RAPL package power | **PSU total − GPU** (rest of the system) if the counter is unreadable |
+| CPU CCD | CCD2 temperature | **CCD1** on CPUs with a single CCD (8-core X3D parts, most Intel) |
 | CPU FAN | motherboard fan | no fan sensor on the MSI board → uses the PSU fan (pwm %) |
 | CPU 12V | vcore | vcore not exposed → **PSU 12V rail** |
 | GPU MAX | hotspot | hotspot not exposed by `nvidia-smi` → rolling peak of GPU temp |

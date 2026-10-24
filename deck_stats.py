@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stream Deck 8x4 dashboard (final layout).
 
-  Row 0  CPU    UTIL | TEMP | CCD1 | CLK | PWR | LOAD | MAX | PROC
+  Row 0  CPU    UTIL | TEMP | CCD2 | CLK | PWR | LOAD | MAX | SWAP
   Row 1  GPU    UTIL | TEMP | VRAM | MEM | PWR | FAN  | CLK | MAX
   Row 2  SYSTEM RAM  | MEM  | NV1  | NV2 | NV3 | PSU | VRM  | FAN
   Row 3  LINUX  LOAD | DOWN | UP   | READ|WRITE| 12V | UPT | TIME
@@ -276,6 +276,22 @@ CORSAIR = find_hwmon("corsairpsu", "corsair-psu")
 RAPL, RAPL_RANGE = find_rapl()
 
 
+def _ccd_sensor():
+    """(label, hwmon attribute) for the CCD temperature in row 0.
+
+    Dual-CCD Ryzen 9 parts expose temp3 (CCD1) and temp4 (CCD2); CCD1 is nearly
+    redundant with Tctl on them, while CCD2 is the half nobody watches. On a
+    single-CCD part there is nothing behind a "CCD2" label, so the key keeps
+    reporting CCD1 rather than sitting at "--" forever.
+    """
+    if CPUTEMP is not None and (CPUTEMP / "temp4_input").exists():
+        return "CCD2", "temp4_input"
+    return "CCD1", "temp3_input"
+
+
+CCD_LABEL, CCD_ATTR = _ccd_sensor()
+
+
 def gpu_read():
     """GPU data from nvidia-smi (single call ~50ms)."""
     try:
@@ -391,7 +407,7 @@ class App:
             "t": t,
             "cpu_pct": psutil.cpu_percent(None),
             "cpu_temp": hwmon_scaled(CPUTEMP, "temp1_input", 1000),   # Tctl
-            "ccd1_temp": hwmon_scaled(CPUTEMP, "temp3_input", 1000),  # CCD1
+            "ccd_temp": hwmon_scaled(CPUTEMP, CCD_ATTR, 1000),  # CCD2 / CCD1
             "cpu_clk": self._cpu_clk(),
             "gpu": gpu_read(),
             "nvme_temps": [v for v in
@@ -505,7 +521,7 @@ WIDGETS = [
     # --- Row 0: CPU ---
     (0, 0, "UTIL", "pct",  lambda a, s: s["cpu_pct"], 60, 85),
     (0, 1, "TEMP", "temp", lambda a, s: s["cpu_temp"], 75, 90),
-    (0, 2, "CCD1", "temp", lambda a, s: s["ccd1_temp"], 75, 90),
+    (0, 2, CCD_LABEL, "temp", lambda a, s: s["ccd_temp"], 75, 90),
     (0, 3, "CLK",  "ghz",  lambda a, s: s["cpu_clk"], 0, 0),
     (0, 4, "PWR",  "w",    lambda a, s: a.cpu_pwr(s), 0, 0),
     (0, 5, "LOAD", "loadpair", lambda a, s: tuple(s["load"]), 0, 0),
@@ -958,7 +974,7 @@ def preview():
     swap = namedtuple("Swap", "percent")
     s = {
         "t": time.monotonic(),
-        "cpu_pct": 57, "cpu_temp": 61.2, "ccd1_temp": 52.0, "cpu_clk": 5.24,
+        "cpu_pct": 57, "cpu_temp": 61.2, "ccd_temp": 49.0, "cpu_clk": 5.24,
         "gpu": {"temp": 68.0, "util": 94, "fan": 55, "power": 412.0,
                 "mem_used": 28950.0, "mem_total": 32607.0, "clk": 2.86},
         "nvme_temps": [41.0, 35.0, 29.0],
