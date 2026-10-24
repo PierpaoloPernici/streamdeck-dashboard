@@ -123,13 +123,85 @@ checkout. Remove it with `./install-service.sh --remove`.
 
 ```bash
 .venv/bin/python deck_stats.py --preview   # whole deck preview (8×4) in /tmp/deck_preview
+.venv/bin/python benchmark.py --help       # per-tick cost breakdown (see Performance)
 journalctl --user -u deck-stats -f         # live logs
 ```
+
+## Performance
+
+Measured with `benchmark.py` on the reference machine (MSI X870E, Ryzen 9, RTX
+5090, Corsair PSU, Stream Deck XL): Python 3.14.8, Pillow 13.0.0, psutil 7.2.2,
+40 timed iterations per phase and a 180 s soak of the systemd service. All
+figures are **per tick** (one tick = sample + render + push):
+
+| Phase | median | p95 | share |
+|---|--:|--:|--:|
+| Sensor acquisition (sysfs + psutil, `nvidia-smi` excluded) | 27.0 ms | 27.3 | 40 % |
+| `nvidia-smi` subprocess | 11.2 ms | 11.8 | 16 % |
+| Rendering the 32 key images | 3.5 ms | 3.5 | 5 % |
+| Pushing 32 images to the deck (USB) | 25.8 ms | 120.5 | 38 % |
+| **Total** | **68.3 ms** | | **4.6 % of the 1500 ms interval** |
+
+The `p95` of the USB row is the **first** refresh after the device is opened
+(libusb/HID warm-up); the remaining ticks stay near 26 ms.
+
+Inside the 27 ms of acquisition, the cost is hardware, not Python:
+
+| Source | median |
+|---|--:|
+| 5 `corsairpsu` attributes | 12.0 ms — 2.0 ms each: every read is a USB control transfer to the PSU |
+| 3 NVMe temperatures | 4.0 ms — one SMART log command per controller |
+| cpufreq ×16, `/proc/diskstats`, per-thread `cpu_percent` | 0.06–0.08 ms each |
+| psutil mem/swap, `/proc/net/dev`, `statvfs`, loadavg, k10temp, RAPL | 0.001–0.03 ms each |
+
+Resources, sampled from `/proc` every 2 s for 180 s while the service ran:
+
+| | mean | median | p95 | max |
+|---|--:|--:|--:|--:|
+| RSS | 35.2 MB | 35.2 | 35.2 | 35.2 |
+| CPU (one core) | 0.89 % | 1.00 | 1.50 | 2.00 |
+
+No growth over the window (+0.0 MB), threads 4 → 4, file descriptors 8 → 8.
+systemd's own accounting agrees: 9.98 s of CPU over 9 min 51 s, 41.9 MB peak.
+
+**These are latencies, not CPU time.** Most of the 68 ms is waiting on devices
+— a subprocess, a PSU register, the HID endpoint — which is why the process
+uses under 1 % of a core. A rewrite in a compiled language would shrink the
+3.5 ms of PIL work, not the 27 ms of sensor reads and 26 ms of USB push, so it
+buys nothing measurable here.
+
+Headroom at faster refresh rates, *theoretical* (the measured 68.3 ms divided
+by the interval — the behaviour of the PSU and the USB endpoint at high rates
+is not benchmarked):
+
+| `DECK_UPDATE_SECONDS` | tick occupancy |
+|---|--:|
+| 1.5 (default) | 4.6 % |
+| 1.0 | 6.8 % |
+| 0.5 | 13.7 % |
+| 0.25 | 27.3 % |
+
+The default stays 1.5 s: for temperatures and system statistics it is already
+faster than readable, and it leaves the bus and the PSU idle.
+
+```bash
+.venv/bin/python benchmark.py --skip-deck        # sensors + render + soak, device untouched
+systemctl --user stop deck-stats                 # the USB phase needs the device
+.venv/bin/python benchmark.py --skip-soak
+systemctl --user start deck-stats
+```
+
+`--soak-pid auto` (default) reads the `MainPID` of the running service, so the
+RSS/CPU numbers come from the real process and cost it nothing; `--iters` sets
+the iteration count. Two measurements worth taking before optimising further:
+NVML in place of the `nvidia-smi` subprocess (11 ms/tick), and differential
+refresh, pushing only the keys whose image changed (26 ms/tick).
 
 ## Notes
 
 - Fixed-rate loop: the interval is measured with `time.monotonic()`, so slow
-  ticks do not accumulate drift. `nvidia-smi` costs ~50 ms per tick.
+  ticks do not accumulate drift. `nvidia-smi` costs ~11 ms per tick (measured,
+  see Performance).
 - `CLK` is the highest current core clock across all cores (`scaling_cur_freq`),
   not `cpu0`: the sampler's own core is a poor proxy for boost.
 - `MAX` is a rolling peak over `DECK_PEAK_WINDOW`, not an all-time maximum, so

@@ -326,7 +326,7 @@ def _f(x):
 
 
 def gpu_read():
-    """GPU data from nvidia-smi (single call ~50ms).
+    """GPU data from nvidia-smi (one subprocess per tick, ~11 ms measured).
 
     Only the individual fields are forgiving: a read that genuinely failed
     (timeout, binary missing, short row) still raises into the except below
