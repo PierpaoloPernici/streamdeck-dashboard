@@ -403,8 +403,8 @@ class App:
             "psu_fan_rpm": hwmon_value(CORSAIR, "fan1_input"),
             "rail12": hwmon_scaled(CORSAIR, "in1_input", 1000),
             "ram": psutil.virtual_memory(),
+            "swap": psutil.swap_memory(),
             "load": _loadavg(),
-            "proc": len(psutil.pids()),
         }
         s["net_rx"], s["net_tx"] = _net_io()
         s["disk_r"], s["disk_w"] = _disk_io()
@@ -488,7 +488,7 @@ class App:
 
 # ---------------- Widgets ----------------
 # (row, column, label, kind, getter(App, sample)->value, warn, crit)
-# kind: pct=bar+%, temp, peak, w, ghz, gb, v, rpm, loadpair, rate, count, time, upt
+# kind: pct=bar+%, temp, peak, w, ghz, gb, v, rpm, loadpair, rate, time, upt
 
 APP = App()
 
@@ -511,7 +511,7 @@ WIDGETS = [
     (0, 5, "LOAD", "loadpair", lambda a, s: tuple(s["load"]), 0, 0),
     (0, 6, "MAX",  "peak", lambda a, s: a.peak("cpu", s["cpu_temp"], s["t"]),
      75, 90),
-    (0, 7, "PROC", "count", lambda a, s: s["proc"], 0, 0),
+    (0, 7, "SWAP", "pct",  lambda a, s: s["swap"].percent, 50, 80),
     # --- Row 1: GPU ---
     (1, 0, "UTIL", "pct",  lambda a, s: (s["gpu"] or {}).get("util"), 60, 85),
     (1, 1, "TEMP", "temp", lambda a, s: (s["gpu"] or {}).get("temp"), 75, 85),
@@ -727,8 +727,6 @@ def render_key(label, kind, value, warn=0, crit=0, row=None, unit=None,
             text = f"{value:.0f}"
         elif kind == "rate":
             text = fmt_rate(value)
-        elif kind == "count":
-            text = f"{value:.0f}"
         elif kind == "time":
             text = value
         elif kind == "upt":
@@ -957,6 +955,7 @@ def preview():
     out = Path("/tmp/deck_preview")
     out.mkdir(exist_ok=True)
     ram = namedtuple("Ram", "percent used total")
+    swap = namedtuple("Swap", "percent")
     s = {
         "t": time.monotonic(),
         "cpu_pct": 57, "cpu_temp": 61.2, "ccd1_temp": 52.0, "cpu_clk": 5.24,
@@ -966,7 +965,7 @@ def preview():
         "psu_w": 510.0, "psu_vrm": 47.0,
         "psu_fan_pct": 34, "psu_fan_rpm": 368, "rail12": 12.06,
         "ram": ram(percent=46, used=12.4 * 1024 ** 3, total=32 * 1024 ** 3),
-        "load": [0.76, 0.55], "proc": 301,
+        "load": [0.76, 0.55], "swap": swap(percent=12),
         "net_rx": 0, "net_tx": 0, "disk_r": 0, "disk_w": 0,
         "disk_free": 842.1 * 1024 ** 3, "disk_total": 1863 * 1024 ** 3,
     }

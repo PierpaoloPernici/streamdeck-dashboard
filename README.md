@@ -11,7 +11,7 @@ hwmon and `nvidia-smi`.
 ## Layout
 
 ```
-ROW 0  CPU     UTIL | TEMP | CCD1 | CLK | PWR | LOAD | MAX | PROC
+ROW 0  CPU     UTIL | TEMP | CCD1 | CLK | PWR | LOAD | MAX | SWAP
 ROW 1  GPU     UTIL | TEMP | VRAM | MEM | PWR | FAN  | CLK | MAX
 ROW 2  SYSTEM  RAM  | MEM  | NV1  | NV2 | NV3 | PSU  | VRM | FAN
 ROW 3  LINUX   DSK  | DOWN | UP   | READ|WRITE| 12V  | UPT | TIME
@@ -33,7 +33,7 @@ ROW 3  LINUX   DSK  | DOWN | UP   | READ|WRITE| 12V  | UPT | TIME
   never a fake one
 - `DSK` is the free space on `/` — what a normal user can still write, not
   counting the reserve the root filesystem keeps for itself
-- Colored bar **only** on UTIL, VRAM, RAM and FAN %
+- Colored bar **only** on UTIL, VRAM, RAM, SWAP and FAN %
 - **Sparkline** (last 40 samples, ~1 min at 1.5 s) in the bottom zone of the
   keys that would otherwise leave it empty: CPU/GPU `TEMP`, CPU/GPU `PWR`,
   `PSU`, `DOWN`, `UP`, `READ`, `WRITE`. The bottom zone holds exactly one thing,
@@ -47,6 +47,8 @@ ROW 3  LINUX   DSK  | DOWN | UP   | READ|WRITE| 12V  | UPT | TIME
 - `LOAD` has no absolute warning level: it is normalised by core count, yellow
   from 70 % of the cores, red from 100 %. The 5 min average stays a gray sub-line
 - `12V` is colored by the deviation from 12.00 V: yellow from 5 %, red from 8 %
+- `SWAP` is yellow from 50 % and red from 80 % — in use at all is the signal,
+  saturating it is the alarm
 - A key that reaches its critical threshold also gets a dark red background
   tint, so the alarm survives the distance
 - `--` = sensor unavailable at that moment (never a placeholder `0`)
@@ -57,7 +59,7 @@ ROW 3  LINUX   DSK  | DOWN | UP   | READ|WRITE| 12V  | UPT | TIME
 |---|---|
 | CPU | `psutil` (load), `k10temp` or `coretemp` hwmon (Tctl/CCD1), RAPL (power), cpufreq (max core clock) |
 | GPU | `nvidia-smi` (util, temp, VRAM, power, fan, clock) |
-| System | RAM/CPU load, up to 3 NVMe hwmon temperatures (NV1–NV3), `corsairpsu` hwmon *(optional: power, VRM, fan, 12 V rail)* |
+| System | RAM/swap (`psutil.virtual_memory`, `psutil.swap_memory`), up to 3 NVMe hwmon temperatures (NV1–NV3), `corsairpsu` hwmon *(optional: power, VRM, fan, 12 V rail)* |
 | Linux | `/proc/loadavg`, `/proc/net/dev`, `/proc/diskstats`, `os.statvfs("/")` (DSK: free space), `psutil.boot_time()` (uptime, suspend-aware), clock |
 
 Everything is auto-detected: the CPU temperature chip, the RAPL package
