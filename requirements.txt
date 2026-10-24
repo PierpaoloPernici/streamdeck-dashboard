@@ -1,0 +1,4 @@
+# Runtime dependencies for deck_stats.py
+psutil>=5.9,<8
+pillow>=10.1,<14
+streamdeck>=0.9.8,<0.11

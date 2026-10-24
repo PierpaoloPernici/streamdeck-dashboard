@@ -1,13 +1,25 @@
+# Template systemd *user* unit for deck-stats.
+#
+# Do not copy this file by hand: install it with
+#
+#     ./install-service.sh
+#
+# which fills in the two placeholders with the absolute paths of your
+# checkout and writes the result to ${XDG_CONFIG_HOME:-~/.config}/systemd/user/.
+
 [Unit]
 Description=Stream Deck stats dashboard (CPU/GPU/temp)
 After=graphical-session.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/progetti/deck
-ExecStart=%h/progetti/deck/.venv/bin/python -u %h/progetti/deck/deck_stats.py
+WorkingDirectory=@REPO@
+ExecStart=@PYTHON@ -u @REPO@/deck_stats.py
+
 Restart=always
 RestartSec=5
+# Give the SIGTERM handler time to reset the deck before the kill.
+TimeoutStopSec=10
 
 [Install]
 WantedBy=default.target

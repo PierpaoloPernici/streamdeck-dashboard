@@ -14,10 +14,24 @@ Graphic rules:
 Usage:
   deck_stats.py            run the monitor
   deck_stats.py --preview  render the whole deck preview to /tmp/deck_preview
+
+Everything machine-specific is either auto-detected (sensors, fonts, RAPL) or
+overridable through the environment:
+
+  DECK_UPDATE_SECONDS  refresh interval, default 1.5
+  DECK_BRIGHTNESS      deck brightness 0-100, default 70
+  DECK_PEAK_WINDOW     horizon of the MAX keys in seconds, default 3600
+  DECK_GPU_POWER_MAX   GPU board power limit in W, default 550
+  DECK_PSU_POWER_MAX   PSU rated output in W, default 650
 """
 
+import functools
+import os
+import signal
+import subprocess
 import sys
 import time
+from collections import namedtuple
 from datetime import datetime
 from pathlib import Path
 
@@ -29,13 +43,58 @@ from StreamDeck.ImageHelpers import PILHelper
 
 # ---------------- Config -------------
 
-UPDATE_SECONDS = 1.5
-BRIGHTNESS = 70
+
+def _env_num(name, default, cast=float):
+    """Numeric override from the environment, silent fallback to default."""
+    try:
+        return cast(os.environ[name])
+    except (KeyError, ValueError):
+        return default
+
+
+UPDATE_SECONDS = _env_num("DECK_UPDATE_SECONDS", 1.5)
+BRIGHTNESS = _env_num("DECK_BRIGHTNESS", 70, int)
+PEAK_WINDOW = _env_num("DECK_PEAK_WINDOW", 3600.0)   # rolling peak horizon (s)
+
 KEY_W, KEY_H = 96, 96
 COLS = 8
 
-FONT_BOLD = "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf"
-FONT_REG = "/usr/share/fonts/TTF/DejaVuSans.ttf"
+# DejaVu Sans is looked up in the usual per-distro locations (see _FONT_DIRS).
+_FONT_DIRS = (
+    "/usr/share/fonts/TTF",                     # Arch
+    "/usr/share/fonts/truetype/dejavu",         # Debian / Ubuntu
+    "/usr/share/fonts/dejavu",                  # Fedora
+    "/usr/share/fonts/dejavu-sans-fonts",       # openSUSE
+    "/usr/local/share/fonts",
+    "/usr/share/fonts",
+    "/Library/Fonts",                           # macOS
+)
+
+
+def _find_font(filename):
+    for d in _FONT_DIRS:
+        p = Path(d) / filename
+        if p.is_file():
+            return str(p)
+    return None
+
+
+FONT_BOLD_FILE = _find_font("DejaVuSans-Bold.ttf")
+
+
+@functools.lru_cache(maxsize=64)
+def font(size: int) -> ImageFont.ImageFont:
+    """Cached font handle; falls back to Pillow's default when DejaVu is absent."""
+    if FONT_BOLD_FILE:
+        try:
+            return ImageFont.truetype(FONT_BOLD_FILE, size)
+        except OSError:
+            pass
+    try:
+        return ImageFont.load_default(size=size)     # Pillow >= 10.1
+    except TypeError:                                # very old Pillow
+        return ImageFont.load_default()
+
 
 COL_BG = (14, 14, 18)
 COL_TRACK = (42, 42, 53)
@@ -46,30 +105,54 @@ COL_OK = (61, 220, 132)
 COL_WARN = (255, 179, 64)
 COL_CRIT = (255, 82, 82)
 
-GPU_POWER_MAX = 550.0
-PSU_POWER_MAX = 650.0
+# Power thresholds are derived from the machine's own limits (see env vars).
+GPU_POWER_MAX = _env_num("DECK_GPU_POWER_MAX", 550.0)
+PSU_POWER_MAX = _env_num("DECK_PSU_POWER_MAX", 650.0)
+GPU_W_WARN, GPU_W_CRIT = GPU_POWER_MAX * 0.65, GPU_POWER_MAX * 0.90
+PSU_W_WARN, PSU_W_CRIT = PSU_POWER_MAX * 0.70, PSU_POWER_MAX * 0.92
 
-RAPL = Path("/sys/class/powercap/intel-rapl:0/energy_uj")
+SECTOR = 512        # bytes per sector in /proc/diskstats
 
 
 # ---------------- Sensors ----------------
 
-def find_hwmon(name: str):
+def _hwmon_dirs():
+    """(chip name, path) for every readable hwmon device."""
+    out = []
     for p in sorted(Path("/sys/class/hwmon").glob("hwmon*")):
         try:
-            if (p / "name").read_text().strip() == name:
-                return p
-        except OSError:
-            pass
+            out.append(((p / "name").read_text().strip(), p))
+        except OSError:          # device vanished or unreadable: skip it
+            continue
+    return out
+
+
+def find_hwmon(*names: str):
+    """First hwmon matching any of the given chip names, in priority order."""
+    devices = _hwmon_dirs()
+    for name in names:
+        for chip, path in devices:
+            if chip == name:
+                return path
     return None
 
 
 def find_hwmons(name: str) -> list:
-    return [p for p in sorted(Path("/sys/class/hwmon").glob("hwmon*"))
-            if (p / "name").read_text().strip() == name]
+    """Every hwmon matching the chip name (e.g. all NVMe drives)."""
+    return [p for chip, p in _hwmon_dirs() if chip == name]
+
+
+def hwmon_name(hwmon_dir):
+    if hwmon_dir is None:
+        return None
+    try:
+        return (hwmon_dir / "name").read_text().strip()
+    except OSError:
+        return None
 
 
 def hwmon_value(hwmon_dir, attr: str):
+    """Raw integer value, or None when the sensor/attribute is missing."""
     if hwmon_dir is None:
         return None
     try:
@@ -78,14 +161,41 @@ def hwmon_value(hwmon_dir, attr: str):
         return None
 
 
-K10TEMP = find_hwmon("k10temp")
+def hwmon_scaled(hwmon_dir, attr: str, divisor: float):
+    """Value in engineering units (millidegrees -> degC, microwatt -> W).
+
+    Returns None when the sensor is unavailable, so the key renders '--'
+    instead of a misleading 0.
+    """
+    value = hwmon_value(hwmon_dir, attr)
+    return None if value is None else value / divisor
+
+
+def find_rapl():
+    """(energy_uj path, wrap-around range) of the first CPU package domain."""
+    for p in sorted(Path("/sys/class/powercap").glob("intel-rapl:*")):
+        try:
+            if not (p / "name").read_text().strip().startswith("package"):
+                continue
+            energy = p / "energy_uj"
+            if not energy.exists():
+                continue
+            rng = p / "max_energy_range_uj"
+            return energy, (int(rng.read_text()) if rng.exists() else None)
+        except (OSError, ValueError):
+            continue
+    return None, None
+
+
+# CPU temperature chip: AMD exposes k10temp, Intel coretemp.
+CPUTEMP = find_hwmon("k10temp", "coretemp")
 NVMES = find_hwmons("nvme")
-CORSAIR = find_hwmon("corsairpsu")
+CORSAIR = find_hwmon("corsairpsu", "corsair-psu")
+RAPL, RAPL_RANGE = find_rapl()
 
 
 def gpu_read():
     """GPU data from nvidia-smi (single call ~50ms)."""
-    import subprocess
     try:
         out = subprocess.run(
             ["nvidia-smi",
@@ -103,6 +213,15 @@ def gpu_read():
     except Exception as e:
         print(f"[gpu] read error: {e}", file=sys.stderr)
         return None
+
+
+def _loadavg():
+    """1 and 5 minute load averages, best effort."""
+    try:
+        with open("/proc/loadavg") as f:
+            return [float(x) for x in f.read().split()[:2]]
+    except (OSError, ValueError):
+        return [None, None]
 
 
 def _net_io():
@@ -125,7 +244,12 @@ def _net_io():
 
 
 def _disk_io():
-    """Total bytes read/written from /proc/diskstats."""
+    """Total bytes read/written, whole block devices only.
+
+    Partitions are skipped on purpose: /proc/diskstats reports them next to
+    their parent disk with overlapping counters, so summing both would double
+    the rate. A real disk has a /sys/block/<dev> entry, a partition does not.
+    """
     read = write = 0
     try:
         with open("/proc/diskstats") as f:
@@ -133,9 +257,13 @@ def _disk_io():
                 parts = line.split()
                 if len(parts) < 10:
                     continue
-                if parts[2].startswith(("sd", "nvme", "vd")):
-                    read += int(parts[5]) * 512
-                    write += int(parts[9]) * 512
+                dev = parts[2]
+                if not dev.startswith(("sd", "nvme", "vd", "hd", "mmcblk")):
+                    continue
+                if not Path("/sys/block", dev).exists():
+                    continue                     # partition, already counted
+                read += int(parts[5]) * SECTOR
+                write += int(parts[9]) * SECTOR
     except (OSError, ValueError, IndexError):
         pass
     return read, write
@@ -147,7 +275,6 @@ class App:
     def __init__(self):
         self.st = {
             "peaks": {},
-            "net": None, "disk": None,
             "rapl": None, "rapl_t": None,
         }
         self.psu_w_last = None
@@ -156,25 +283,31 @@ class App:
     # --- data sources ---
 
     def sample(self):
+        t = time.monotonic()
         s = {
+            "t": t,
             "cpu_pct": psutil.cpu_percent(None),
-            "cpu_temp": (hwmon_value(K10TEMP, "temp1_input") or 0) / 1000.0,
-            "ccd1_temp": (hwmon_value(K10TEMP, "temp3_input") or 0) / 1000.0,
+            "cpu_temp": hwmon_scaled(CPUTEMP, "temp1_input", 1000),   # Tctl
+            "ccd1_temp": hwmon_scaled(CPUTEMP, "temp3_input", 1000),  # CCD1
             "cpu_clk": self._cpu_clk(),
             "gpu": gpu_read(),
-            "nvme_temps": [(hwmon_value(n, "temp1_input") or 0) / 1000.0
-                           for n in NVMES],
-            "psu_w": (hwmon_value(CORSAIR, "power1_input") or 0) / 1e6,
-            "psu_vrm": (hwmon_value(CORSAIR, "temp1_input") or 0) / 1000.0,
+            "nvme_temps": [v for v in
+                           (hwmon_scaled(n, "temp1_input", 1000) for n in NVMES)
+                           if v is not None],
+            "psu_w": hwmon_scaled(CORSAIR, "power1_input", 1e6),
+            "psu_vrm": hwmon_scaled(CORSAIR, "temp1_input", 1000),
             "psu_fan_pct": hwmon_value(CORSAIR, "pwm1"),
             "psu_fan_rpm": hwmon_value(CORSAIR, "fan1_input"),
-            "rail12": (hwmon_value(CORSAIR, "in1_input") or 0) / 1000.0,
+            "rail12": hwmon_scaled(CORSAIR, "in1_input", 1000),
             "ram": psutil.virtual_memory(),
-            "load": [float(x) for x in open("/proc/loadavg").read().split()[:2]],
+            "load": _loadavg(),
             "proc": len(psutil.pids()),
         }
         s["net_rx"], s["net_tx"] = _net_io()
         s["disk_r"], s["disk_w"] = _disk_io()
+        # kept for cpu_pwr()'s PSU - GPU fallback
+        self.psu_w_last = s["psu_w"]
+        self.gpu_power_last = (s["gpu"] or {}).get("power")
         return s
 
     @staticmethod
@@ -187,38 +320,48 @@ class App:
             return None
 
     def cpu_pwr(self, s):
-        """CPU power from RAPL; fallback: PSU total - GPU (rest of system).
-        In fallback the label stays PWR but the value is "system without GPU"""
-        try:
-            e = int(RAPL.read_text())
-        except (OSError, ValueError):
-            e = None
-        t = time.monotonic()
-        if e is not None and self.st["rapl"] is not None:
-            de = e - self.st["rapl"]
-            dt = t - self.st["rapl_t"]
-            if de < 0:  # counter wrap-around
-                de += int(Path("/sys/class/powercap/intel-rapl:0/"
-                               "max_energy_range_uj").read_text())
-            w = de / dt / 1e6
-            self.st["rapl"] = e
-            self.st["rapl_t"] = t
-            return w
-        self.st["rapl"] = e
-        self.st["rapl_t"] = t
-        if (self.psu_w_last is not None and self.gpu_power_last is not None
-                and self.gpu_power_last > 0):
-            return self.psu_w_last - self.gpu_power_last
+        """CPU package power from RAPL.
+
+        Fallback when RAPL is unreadable or not warmed up yet: PSU total minus
+        GPU draw, i.e. the rest of the system (the key stays labelled PWR).
+        """
+        e = None
+        if RAPL is not None:
+            try:
+                e = int(RAPL.read_text())
+            except (OSError, ValueError):
+                e = None
+
+        t = s["t"]
+        prev, prev_t = self.st["rapl"], self.st["rapl_t"]
+        self.st["rapl"], self.st["rapl_t"] = e, t
+
+        if e is not None and prev is not None and prev_t is not None:
+            de, dt = e - prev, t - prev_t
+            if de < 0 and RAPL_RANGE:        # counter wrap-around
+                de += RAPL_RANGE
+            if dt > 0 and de >= 0:
+                return de / dt / 1e6         # uJ -> W
+            return None
+
+        psu, gpu = self.psu_w_last, self.gpu_power_last
+        if psu is not None and gpu:
+            return psu - gpu
         return None
 
-    def peak(self, key, value):
-        """Rolling peak of a temperature."""
-        prev = self.st["peaks"].get(key)
-        if value is None:
-            return prev
-        if prev is None or value > prev:
-            self.st["peaks"][key] = value
-        return self.st["peaks"][key]
+    def peak(self, key, value, t_now):
+        """Rolling peak over the last PEAK_WINDOW seconds.
+
+        Samples older than the horizon are dropped, so a single hot spike does
+        not pin the MAX key forever.
+        """
+        window = self.st["peaks"].setdefault(key, [])
+        cutoff = t_now - PEAK_WINDOW
+        while window and window[0][0] < cutoff:
+            window.pop(0)
+        if value is not None:
+            window.append((t_now, value))
+        return max((v for _, v in window), default=None)
 
     def rate(self, key, value_now, t_now):
         """Rate from a cumulative counter (bytes/s)."""
@@ -236,6 +379,9 @@ class App:
 
 APP = App()
 
+# Set by the SIGTERM/SIGINT handler; checked by the render loop.
+_STOP = False
+
 WIDGETS = [
     # --- Row 0: CPU ---
     (0, 0, "UTIL", "pct",  lambda a, s: s["cpu_pct"], 60, 85),
@@ -244,7 +390,8 @@ WIDGETS = [
     (0, 3, "CLK",  "ghz",  lambda a, s: s["cpu_clk"], 0, 0),
     (0, 4, "PWR",  "w",    lambda a, s: a.cpu_pwr(s), 0, 0),
     (0, 5, "LOAD", "load", lambda a, s: s["load"][0], 0, 0),
-    (0, 6, "MAX",  "peak", lambda a, s: a.peak("cpu", s["cpu_temp"]), 75, 90),
+    (0, 6, "MAX",  "peak", lambda a, s: a.peak("cpu", s["cpu_temp"], s["t"]),
+     75, 90),
     (0, 7, "PROC", "count", lambda a, s: s["proc"], 0, 0),
     # --- Row 1: GPU ---
     (1, 0, "UTIL", "pct",  lambda a, s: (s["gpu"] or {}).get("util"), 60, 85),
@@ -254,11 +401,12 @@ WIDGETS = [
         if s["gpu"] and s["gpu"].get("mem_total") else None), 75, 90),
     (1, 3, "MEM",  "gb",   lambda a, s: (
         (s["gpu"]["mem_used"] / 1024) if s["gpu"] else None), 0, 0),
-    (1, 4, "PWR",  "w",    lambda a, s: (s["gpu"] or {}).get("power"), 350, 500),
+    (1, 4, "PWR",  "w",    lambda a, s: (s["gpu"] or {}).get("power"),
+     GPU_W_WARN, GPU_W_CRIT),
     (1, 5, "FAN",  "pct",  lambda a, s: (s["gpu"] or {}).get("fan"), 70, 90),
     (1, 6, "CLK",  "ghz",  lambda a, s: (s["gpu"] or {}).get("clk"), 0, 0),
     (1, 7, "MAX",  "peak", lambda a, s: a.peak(
-        "gpu", (s["gpu"] or {}).get("temp")), 75, 85),
+        "gpu", (s["gpu"] or {}).get("temp"), s["t"]), 75, 85),
     # --- Row 2: System ---
     (2, 0, "RAM",  "pct",  lambda a, s: s["ram"].percent, 70, 90),
     (2, 1, "MEM",  "gb",   lambda a, s: s["ram"].used / 1024 ** 3, 0, 0),
@@ -266,7 +414,7 @@ WIDGETS = [
         s["nvme_temps"][0] if len(s["nvme_temps"]) > 0 else None), 70, 80),
     (2, 3, "NV2",  "temp", lambda a, s: (
         s["nvme_temps"][1] if len(s["nvme_temps"]) > 1 else None), 70, 80),
-    (2, 4, "PSU",  "w",    lambda a, s: s["psu_w"], 450, 600),
+    (2, 4, "PSU",  "w",    lambda a, s: s["psu_w"], PSU_W_WARN, PSU_W_CRIT),
     (2, 5, "VRM",  "temp", lambda a, s: s["psu_vrm"], 55, 65),
     (2, 6, "12V",  "v",    lambda a, s: s["rail12"], 0, 0),
     (2, 7, "FAN",  "pct",  lambda a, s: s["psu_fan_pct"], 70, 90),
@@ -274,13 +422,13 @@ WIDGETS = [
     (3, 0, "LOAD1", "load", lambda a, s: s["load"][0], 0, 0),
     (3, 1, "LOAD5", "load", lambda a, s: s["load"][1], 0, 0),
     (3, 2, "DOWN",  "rate", lambda a, s: a.rate(
-        "net_rx", s["net_rx"], time.monotonic()), 0, 0),
+        "net_rx", s["net_rx"], s["t"]), 0, 0),
     (3, 3, "UP",    "rate", lambda a, s: a.rate(
-        "net_tx", s["net_tx"], time.monotonic()), 0, 0),
+        "net_tx", s["net_tx"], s["t"]), 0, 0),
     (3, 4, "READ",  "rate", lambda a, s: a.rate(
-        "disk_r", s["disk_r"], time.monotonic()), 0, 0),
+        "disk_r", s["disk_r"], s["t"]), 0, 0),
     (3, 5, "WRITE", "rate", lambda a, s: a.rate(
-        "disk_w", s["disk_w"], time.monotonic()), 0, 0),
+        "disk_w", s["disk_w"], s["t"]), 0, 0),
     (3, 6, "UPT",   "upt",  lambda a, s: time.monotonic(), 0, 0),
     (3, 7, "TIME",  "time", lambda a, s: datetime.now().strftime("%H:%M"), 0, 0),
 ]
@@ -332,10 +480,7 @@ def render_key(label, kind, value, warn=0, crit=0) -> Image.Image:
             text = f"{value:.0f}%"
             ratio = max(0.0, min(1.0, value / 100.0))
             color = key_color(value, warn, crit)
-        elif kind == "temp":
-            text = f"{value:.0f}°"
-            color = key_color(value, warn, crit)
-        elif kind == "peak":
+        elif kind in ("temp", "peak"):
             text = f"{value:.0f}°"
             color = key_color(value, warn, crit)
         elif kind == "w":
@@ -363,12 +508,12 @@ def render_key(label, kind, value, warn=0, crit=0) -> Image.Image:
 
     img = Image.new("RGB", (KEY_W, KEY_H), COL_BG)
     d = ImageDraw.Draw(img)
-    d.text((6, 4), label, font=ImageFont.truetype(FONT_BOLD, 14),
-           fill=COL_TITLE)
+    d.text((6, 4), label, font=font(14), fill=COL_TITLE)
 
-    f_val = ImageFont.truetype(FONT_BOLD, 40)
-    while f_val.size > 20 and d.textlength(text, font=f_val) > 84:
-        f_val = ImageFont.truetype(FONT_BOLD, f_val.size - 2)
+    size = 40
+    while size > 20 and d.textlength(text, font=font(size)) > 84:
+        size -= 2
+    f_val = font(size)
     w = d.textlength(text, font=f_val)
     d.text(((KEY_W - w) / 2, 24), text, font=f_val, fill=color)
 
@@ -391,53 +536,103 @@ def run(deck):
     print(f"Connected: {deck.deck_type()} (serial {deck.get_serial_number()})")
     psutil.cpu_percent(None)  # calibrate the first sample
 
-    t0 = time.monotonic()
-    while True:
-        s = APP.sample()
-        APP.psu_w_last = s["psu_w"]
-        APP.gpu_power_last = (s["gpu"] or {}).get("power")
-        for row, col, label, kind, getter, warn, crit in WIDGETS:
-            try:
-                value = getter(APP, s)
-            except Exception as e:
-                print(f"[{label}] {e}", file=sys.stderr)
-                value = None
-            img = render_key(label, kind, value, warn, crit)
-            key = row * COLS + col
-            try:
-                deck.set_key_image(key, PILHelper.to_native_key_format(deck, img))
-            except Exception as e:
-                print(f"[deck] set_key_image({key}): {e}", file=sys.stderr)
-                raise
-        time.sleep(UPDATE_SECONDS)
+    next_tick = time.monotonic()
+    try:
+        while not _STOP:
+            s = APP.sample()
+            for row, col, label, kind, getter, warn, crit in WIDGETS:
+                try:
+                    value = getter(APP, s)
+                except Exception as e:
+                    print(f"[{label}] {e}", file=sys.stderr)
+                    value = None
+                img = render_key(label, kind, value, warn, crit)
+                key = row * COLS + col
+                try:
+                    deck.set_key_image(
+                        key, PILHelper.to_native_key_format(deck, img))
+                except Exception as e:
+                    print(f"[deck] set_key_image({key}): {e}", file=sys.stderr)
+                    raise
+
+            # fixed-rate loop: sleep the remainder instead of drifting
+            next_tick += UPDATE_SECONDS
+            delay = next_tick - time.monotonic()
+            if delay < 0:                    # fell behind: resync, no bursts
+                next_tick = time.monotonic()
+                delay = 0
+            time.sleep(delay)
+    finally:
+        # leaving the keys lit on stale numbers looks like a live dashboard
+        try:
+            deck.reset()
+            deck.set_brightness(0)
+        except Exception:
+            pass
+
+
+def _graceful_sigterm(signum, frame):
+    """Request a clean shutdown: the main loop exits and blanks the deck."""
+    global _STOP
+    _STOP = True
+
+
+def _shutdown(deck, code: int = 0):
+    """Blank the keys and leave without running hidapi's atexit hook.
+
+    The streamdeck library registers hid_exit() with atexit; calling it from
+    Python's normal shutdown races the libusb event thread and aborts the
+    process (usbi_mutex_destroy assertion). We therefore reset the deck, flush
+    the streams and skip interpreter teardown with os._exit().
+    """
+    if deck is not None:
+        try:
+            deck.reset()
+            deck.set_brightness(0)
+        except Exception:
+            pass
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:
+        pass
+    os._exit(code)
 
 
 def main():
     manager = DeviceManager()
     print("Sensors:", {
-        "k10temp": bool(K10TEMP), "nvme": len(NVMES),
-        "corsairpsu": bool(CORSAIR),
-        "rapl": RAPL.exists(),
+        "cpu_temp": hwmon_name(CPUTEMP),
+        "nvme": len(NVMES),
+        "psu": hwmon_name(CORSAIR),
+        "rapl": RAPL is not None,
     })
+    signal.signal(signal.SIGTERM, _graceful_sigterm)
+    signal.signal(signal.SIGINT, _graceful_sigterm)
 
-    while True:
+    deck = None
+    while not _STOP:
         try:
             decks = manager.enumerate()
-            if decks:
-                deck = decks[0]
-                if not deck.is_open():
-                    deck.open()
-                run(deck)
-            else:
+            if not decks:
                 print("No Stream Deck found, retrying in 3s...")
                 time.sleep(3)
+                continue
+            deck = decks[0]
+            if not deck.is_open():
+                deck.open()
+            run(deck)                     # returns once _STOP is set
         except Exception as e:
             print(f"Error: {type(e).__name__}: {e}", file=sys.stderr)
-            try:
-                deck.close()
-            except Exception:
-                pass
+            if deck is not None:
+                try:
+                    deck.close()
+                except Exception:
+                    pass
+            deck = None
             time.sleep(3)
+
+    _shutdown(deck)
 
 
 def render_mockup(key_images: list) -> Image.Image:
@@ -474,25 +669,33 @@ def render_mockup(key_images: list) -> Image.Image:
 
 
 def preview():
-    """Render the whole 8x4 deck preview (grid + device mockup) to /tmp/deck_preview."""
+    """Render the whole 8x4 deck preview (grid + device mockup) to /tmp/deck_preview.
+
+    Values are simulated on purpose: the preview is reproducible on any machine.
+    """
     out = Path("/tmp/deck_preview")
     out.mkdir(exist_ok=True)
+    ram = namedtuple("Ram", "percent used")
     s = {
+        "t": time.monotonic(),
         "cpu_pct": 57, "cpu_temp": 61.2, "ccd1_temp": 52.0, "cpu_clk": 5.24,
         "gpu": {"temp": 68.0, "util": 94, "fan": 55, "power": 412.0,
                 "mem_used": 28950.0, "mem_total": 32607.0, "clk": 2.86},
         "nvme_temps": [41.0, 35.0],
         "psu_w": 510.0, "psu_vrm": 47.0,
         "psu_fan_pct": 34, "psu_fan_rpm": 368, "rail12": 12.06,
-        "ram": psutil.virtual_memory(),
+        "ram": ram(percent=46, used=12.4 * 1024 ** 3),
         "load": [0.76, 0.55], "proc": 301,
         "net_rx": 0, "net_tx": 0, "disk_r": 0, "disk_w": 0,
     }
-    APP.st["peaks"] = {"cpu": 63.0, "gpu": 69.0}
-    APP.st["net_rx"] = (0, time.monotonic())
-    APP.st["net_tx"] = (0, time.monotonic())
-    APP.st["disk_r"] = (0, time.monotonic())
-    APP.st["disk_w"] = (0, time.monotonic())
+    APP.st["peaks"].clear()
+    APP.st["net_rx"] = (0, s["t"])
+    APP.st["net_tx"] = (0, s["t"])
+    APP.st["disk_r"] = (0, s["t"])
+    APP.st["disk_w"] = (0, s["t"])
+    # prime the CPU power fallback (PSU total - GPU) so the key is not blank
+    APP.psu_w_last = s["psu_w"]
+    APP.gpu_power_last = s["gpu"]["power"]
 
     key_imgs = []
     grid = Image.new("RGB", (COLS * KEY_W, 4 * KEY_H), (0, 0, 0))
