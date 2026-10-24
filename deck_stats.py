@@ -39,12 +39,13 @@ overridable through the environment:
 """
 
 import functools
+import math
 import os
 import signal
 import subprocess
 import sys
 import time
-from collections import namedtuple
+from collections import defaultdict, deque, namedtuple
 from datetime import datetime
 from pathlib import Path
 
@@ -83,6 +84,8 @@ UNIT_XY = (90, 14)          # top-right, vertically centred on the label
 UNIT_SIZE = 11
 SUB_CY = 78                 # sub-line centre, bottom zone
 BAR_BOX = (6, 78, 90, 90)   # bar, bottom zone
+SPARK_BOX = (6, 70, 90, 90)  # sparkline, bottom zone
+SPARK_MIN_SPAN = 0.01        # min window span, as a fraction of the value
 
 # DejaVu Sans (condensed where available) is looked up in the usual per-distro
 # locations (see _FONT_DIRS).
@@ -344,6 +347,8 @@ class App:
             "peaks": {},
             "rapl": None, "rapl_t": None,
         }
+        # (row, col) -> recent numeric values, for the sparklines
+        self.history = defaultdict(lambda: deque(maxlen=HISTORY_LEN))
         self.psu_w_last = None
         self.gpu_power_last = None
 
@@ -506,6 +511,21 @@ WIDGETS = [
 
 # Per-key data that is not part of the WIDGETS tuple, keyed by (row, col).
 
+# Keys that get a sparkline in the bottom zone. Keys with a bar or a sub-line
+# are excluded by construction: the bottom zone holds exactly one thing.
+HISTORY_KEYS = {
+    (0, 1),     # CPU TEMP
+    (0, 4),     # CPU PWR
+    (1, 1),     # GPU TEMP
+    (1, 4),     # GPU PWR
+    (2, 5),     # PSU
+    (3, 1),     # DOWN
+    (3, 2),     # UP
+    (3, 3),     # READ
+    (3, 4),     # WRITE
+}
+HISTORY_LEN = 40            # samples kept per key (~1 min at 1.5 s)
+
 # Top-right unit, drawn in COL_TITLE at size 11 when it fits next to the label.
 UNITS = {
     (3, 1): "MB/s",     # DOWN
@@ -577,6 +597,22 @@ def resolve_sub(row, col, s):
         return fn(APP, s)
     except Exception:
         return None
+
+
+def spark_points(values, box=SPARK_BOX):
+    """Polyline points for a sparkline, scaled min-max inside box."""
+    x0, y0, x1, y1 = box
+    lo, hi = min(values), max(values)
+    # Minimum span guard: a flat window must render as a flat line in the
+    # middle of the zone instead of magnifying sensor noise to full height.
+    guard = max(abs(hi), abs(lo), 1.0) * SPARK_MIN_SPAN
+    if hi - lo < guard:
+        mid = (hi + lo) / 2
+        lo, hi = mid - guard / 2, mid + guard / 2
+    span = hi - lo
+    step = (x1 - x0) / (len(values) - 1)
+    return [(x0 + i * step, y1 - (v - lo) / span * (y1 - y0))
+            for i, v in enumerate(values)]
 
 
 def render_key(label, kind, value, warn=0, crit=0, row=None, unit=None,
@@ -679,6 +715,8 @@ def render_key(label, kind, value, warn=0, crit=0, row=None, unit=None,
     elif sub:              # bottom zone: bar wins, then the sub-line
         d.text((KEY_W / 2, SUB_CY), sub, font=font(13), fill=COL_TITLE,
                anchor="mm")
+    elif history is not None and len(history) > 1:
+        d.line(spark_points(history), fill=color, width=2, joint="curve")
 
     return img
 
@@ -701,9 +739,15 @@ def run(deck):
                 except Exception as e:
                     print(f"[{label}] {e}", file=sys.stderr)
                     value = None
+                history = None
+                if (row, col) in HISTORY_KEYS:
+                    if isinstance(value, (int, float)):
+                        APP.history[(row, col)].append(float(value))
+                    history = APP.history[(row, col)]
                 img = render_key(label, kind, value, warn, crit, row=row,
                                  unit=UNITS.get((row, col)),
-                                 sub=resolve_sub(row, col, s))
+                                 sub=resolve_sub(row, col, s),
+                                 history=history)
                 key = row * COLS + col
                 try:
                     deck.set_key_image(
@@ -825,6 +869,19 @@ def render_mockup(key_images: list) -> Image.Image:
     return canvas
 
 
+def demo_history(value, phase, n=HISTORY_LEN):
+    """Fixed synthetic window that ends on `value`, for the preview only.
+
+    Deterministic on purpose: the preview image must be reproducible, and no
+    sensor may be read from preview().
+    """
+    base = float(value)
+    amp = abs(base) * 0.15 or 1.0
+    pts = [base + amp * math.sin((i + phase) / 4.0) for i in range(n - 1)]
+    pts.append(base)                 # last sample = the value on screen
+    return pts
+
+
 def preview():
     """Render the whole 8x4 deck preview (grid + device mockup) to /tmp/deck_preview.
 
@@ -850,6 +907,7 @@ def preview():
     APP.st["net_tx"] = (0, s["t"])
     APP.st["disk_r"] = (0, s["t"])
     APP.st["disk_w"] = (0, s["t"])
+    APP.history.clear()
     # prime the CPU power fallback (PSU total - GPU) so the key is not blank
     APP.psu_w_last = s["psu_w"]
     APP.gpu_power_last = s["gpu"]["power"]
@@ -864,9 +922,15 @@ def preview():
             value = 3 * 86400 + 4 * 3600
         if kind == "time":
             value = "08:45"
+        history = None
+        if (row, col) in HISTORY_KEYS and isinstance(value, (int, float)):
+            APP.history[(row, col)].extend(
+                demo_history(value, row * COLS + col))
+            history = APP.history[(row, col)]
         img = render_key(label, kind, value, warn, crit, row=row,
                          unit=UNITS.get((row, col)),
-                         sub=resolve_sub(row, col, s))
+                         sub=resolve_sub(row, col, s),
+                         history=history)
         key_imgs.append(img)
         grid.paste(img, (col * KEY_W, row * KEY_H))
         print(f"  ({row},{col}) {label:6s} {kind:5s} -> {value}")

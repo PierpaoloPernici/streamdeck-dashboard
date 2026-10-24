@@ -31,6 +31,12 @@ ROW 3  LINUX   LOAD | DOWN | UP   | READ|WRITE| 12V  | UPT | TIME
 - `MEM` (GPU) and `MEM` (RAM) show the total as a small second line: `28.3G`
   over `/32G`. A missing total means no line, never a fake one
 - Colored bar **only** on UTIL, VRAM, RAM and FAN %
+- **Sparkline** (last 40 samples, ~1 min at 1.5 s) in the bottom zone of the
+  keys that would otherwise leave it empty: CPU/GPU `TEMP`, CPU/GPU `PWR`,
+  `PSU`, `DOWN`, `UP`, `READ`, `WRITE`. The bottom zone holds exactly one thing,
+  in priority order: bar → sub-line → sparkline. The line is scaled min-max over
+  the window, with a minimum span of 1 % of the value so a flat series stays flat
+  instead of blowing up sensor noise, and it is drawn in the key's current colour
 - A 3 px accent strip on the top edge of every key marks the row:
   blue = CPU, violet = GPU, cyan = SYSTEM, gray = LINUX. These hues are
   outside the green/amber/red family on purpose, which is reserved for status
