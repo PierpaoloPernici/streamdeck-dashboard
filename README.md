@@ -28,6 +28,8 @@ ROW 3  LINUX   LOAD | DOWN | UP   | READ|WRITE| 12V  | UPT | TIME
   of its own — the rates: `DOWN` `UP` `READ` `WRITE` show `MB/s`. If the label
   plus the unit would not fit, the unit is dropped for that key only
 - `LOAD` shows the 1 min average large, with the 5 min one as a small second line
+- `MEM` (GPU) and `MEM` (RAM) show the total as a small second line: `28.3G`
+  over `/32G`. A missing total means no line, never a fake one
 - Colored bar **only** on UTIL, VRAM, RAM and FAN %
 - A 3 px accent strip on the top edge of every key marks the row:
   blue = CPU, violet = GPU, cyan = SYSTEM, gray = LINUX. These hues are

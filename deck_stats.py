@@ -516,7 +516,16 @@ UNITS = {
 
 # Bottom-zone sub-line: callable(App, sample) -> str | None. None means "draw
 # nothing", which is also the answer for a missing sensor (never a fake total).
-SUBS = {}
+SUBS = {
+    # GPU MEM: used / total VRAM, both from the same nvidia-smi sample
+    (1, 3): lambda a, s: (
+        f"/{s['gpu']['mem_total'] / 1024:.0f}G"
+        if s["gpu"] and s["gpu"].get("mem_total") else None),
+    # RAM MEM: used / total system RAM, from the psutil virtual_memory sample
+    (2, 1): lambda a, s: (
+        f"/{s['ram'].total / 1024 ** 3:.0f}G"
+        if getattr(s["ram"], "total", None) else None),
+}
 
 
 # ---------------- Formatting ----------------
@@ -823,7 +832,7 @@ def preview():
     """
     out = Path("/tmp/deck_preview")
     out.mkdir(exist_ok=True)
-    ram = namedtuple("Ram", "percent used")
+    ram = namedtuple("Ram", "percent used total")
     s = {
         "t": time.monotonic(),
         "cpu_pct": 57, "cpu_temp": 61.2, "ccd1_temp": 52.0, "cpu_clk": 5.24,
@@ -832,7 +841,7 @@ def preview():
         "nvme_temps": [41.0, 35.0, 29.0],
         "psu_w": 510.0, "psu_vrm": 47.0,
         "psu_fan_pct": 34, "psu_fan_rpm": 368, "rail12": 12.06,
-        "ram": ram(percent=46, used=12.4 * 1024 ** 3),
+        "ram": ram(percent=46, used=12.4 * 1024 ** 3, total=32 * 1024 ** 3),
         "load": [0.76, 0.55], "proc": 301,
         "net_rx": 0, "net_tx": 0, "disk_r": 0, "disk_w": 0,
     }
