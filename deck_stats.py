@@ -503,7 +503,6 @@ def key_color(v, warn, crit):
 def render_key(label, kind, value, warn=0, crit=0) -> Image.Image:
     """Render a 96x96 key following the graphic rules."""
     sub = None          # small secondary line under the main value
-    value_y = 24
     size_max = 40
     if value is None:
         text, ratio, color = "--", None, COL_OFF
@@ -513,7 +512,7 @@ def render_key(label, kind, value, warn=0, crit=0) -> Image.Image:
         text = "--" if load1 is None else f"{load1:.2f}"
         sub = None if load5 is None else f"5m {load5:.2f}"
         ratio, color = None, COL_VALUE
-        value_y, size_max = 18, 34
+        size_max = 34
     else:
         ratio = None
         color = COL_VALUE
@@ -549,6 +548,10 @@ def render_key(label, kind, value, warn=0, crit=0) -> Image.Image:
         else:
             text = f"{value}"
 
+    # Vertical centre of the value. Keys that also draw something in the
+    # bottom zone (bar or sub-line) sit a little higher to leave room for it.
+    cy = 44 if (ratio is not None or sub is not None) else 54
+
     img = Image.new("RGB", (KEY_W, KEY_H), COL_BG)
     d = ImageDraw.Draw(img)
     d.text((6, 4), label, font=font(14), fill=COL_TITLE)
@@ -557,8 +560,9 @@ def render_key(label, kind, value, warn=0, crit=0) -> Image.Image:
     while size > 20 and d.textlength(text, font=font(size)) > 84:
         size -= 2
     f_val = font(size)
-    w = d.textlength(text, font=f_val)
-    d.text(((KEY_W - w) / 2, value_y), text, font=f_val, fill=color)
+    # anchor="mm" pins the optical centre, so keys where the font had to shrink
+    # ("28.3G") line up with the ones that did not ("45K").
+    d.text((KEY_W / 2, cy), text, font=f_val, fill=color, anchor="mm")
 
     if sub:
         f_sub = font(13)
