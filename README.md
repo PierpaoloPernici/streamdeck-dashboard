@@ -13,14 +13,15 @@ hwmon and `nvidia-smi`.
 ```
 ROW 0  CPU     UTIL | TEMP | CCD1 | CLK | PWR | LOAD | MAX | PROC
 ROW 1  GPU     UTIL | TEMP | VRAM | MEM | PWR | FAN  | CLK | MAX
-ROW 2  SYSTEM  RAM  | MEM  | NV1  | NV2 | PSU | VRM  | 12V | FAN
-ROW 3  LINUX   LOAD1|LOAD5| DOWN | UP  |READ |WRITE | UPT | TIME
+ROW 2  SYSTEM  RAM  | MEM  | NV1  | NV2 | NV3 | PSU  | VRM | FAN
+ROW 3  LINUX   LOAD | DOWN | UP   | READ|WRITE| UPT  |TIME | 12V
 ```
 
 ## Graphic rules
 
 - 4–6 char label on top, small; large centered value
 - Unit inside the value, not in the label: `45°` `66W` `3.7G` `2.8G`
+- `LOAD` shows the 1 min average large, with the 5 min one as a small second line
 - Colored bar **only** on UTIL, VRAM, RAM and FAN %
 - Temperatures: white normal → yellow → red
 - `--` = sensor unavailable at that moment (never a placeholder `0`)
@@ -31,7 +32,7 @@ ROW 3  LINUX   LOAD1|LOAD5| DOWN | UP  |READ |WRITE | UPT | TIME
 |---|---|
 | CPU | `psutil` (load), `k10temp` or `coretemp` hwmon (Tctl/CCD1), RAPL (power), cpufreq (clock) |
 | GPU | `nvidia-smi` (util, temp, VRAM, power, fan, clock) |
-| System | `corsairpsu` hwmon *(optional: power, VRM, fan, 12V rail)*, NVMe hwmon, `psutil` (RAM) |
+| System | RAM/CPU load, up to 3 NVMe hwmon temperatures (NV1–NV3), `corsairpsu` hwmon *(optional: power, VRM, fan, 12 V rail)* |
 | Linux | `/proc/loadavg`, `/proc/net/dev`, `/proc/diskstats`, `psutil.pids()`, clock |
 
 Everything is auto-detected: the CPU temperature chip, the RAPL package
@@ -91,6 +92,11 @@ journalctl --user -u deck-stats -f         # live logs
   the baseline).
 - Disk I/O counts whole block devices only: partitions are reported by
   `/proc/diskstats` with overlapping counters and would double the rate.
+- `NV1`–`NV3` follow controller order (`nvme0`, `nvme1`, `nvme2`), not `hwmonN`
+  numbering: the latter is assigned at probe time and can change between boots,
+  which would silently swap the drive behind a label. Extra drives are reported
+  on the startup log line (`Sensors: {...}`); SATA disks expose no temperature
+  unless the `drivetemp` module is loaded (they are not read yet).
 - If the deck is unplugged the script reconnects automatically; on exit
   (Ctrl-C or SIGTERM from systemd) it blanks the keys instead of leaving stale
   numbers lit.

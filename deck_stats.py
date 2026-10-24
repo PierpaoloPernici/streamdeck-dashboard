@@ -3,13 +3,14 @@
 
   Row 0  CPU    UTIL | TEMP | CCD1 | CLK | PWR | LOAD | MAX | PROC
   Row 1  GPU    UTIL | TEMP | VRAM | MEM | PWR | FAN  | CLK | MAX
-  Row 2  SYSTEM RAM  | MEM  | NV1  | NV2 | PSU | VRM  | 12V | FAN
-  Row 3  LINUX  LOAD1|LOAD5| DOWN | UP  |READ |WRITE | UPT | TIME
+  Row 2  SYSTEM RAM  | MEM  | NV1  | NV2 | NV3 | PSU | VRM  | FAN
+  Row 3  LINUX  LOAD | DOWN | UP   | READ|WRITE| UPT  | TIME| 12V
 
 Graphic rules:
   - 4-6 char label on top, large centered value, unit inside the value (45° 66W 3.7G)
   - bar only on UTIL/VRAM/RAM/FAN %
   - temperatures: white normal -> yellow -> red
+  - LOAD carries the 1 min average, with the 5 min one as a small second line
 
 Usage:
   deck_stats.py            run the monitor
@@ -187,9 +188,35 @@ def find_rapl():
     return None, None
 
 
+def hwmon_controller(hwmon_dir):
+    """Device behind a hwmon entry (e.g. 'nvme1'), when the kernel exposes it."""
+    if hwmon_dir is None:
+        return None
+    try:
+        return (hwmon_dir / "device").resolve().name
+    except OSError:
+        return None
+
+
+def nvme_hwmons() -> list:
+    """NVMe hwmon devices ordered by controller number (nvme0, nvme1, ...).
+
+    hwmonN numbering is assigned at probe time and can change between boots, so
+    sorting by it would silently swap which drive sits behind NV1/NV2/NV3.
+    """
+    found = []
+    for hwmon in find_hwmons("nvme"):
+        controller = hwmon_controller(hwmon) or ""
+        index = controller[4:] if controller.startswith("nvme") else ""
+        known = index.isdigit()
+        found.append((not known, int(index) if known else 0, str(hwmon), hwmon))
+    found.sort(key=lambda item: item[:3])
+    return [hwmon for *_, hwmon in found]
+
+
 # CPU temperature chip: AMD exposes k10temp, Intel coretemp.
 CPUTEMP = find_hwmon("k10temp", "coretemp")
-NVMES = find_hwmons("nvme")
+NVMES = nvme_hwmons()
 CORSAIR = find_hwmon("corsairpsu", "corsair-psu")
 RAPL, RAPL_RANGE = find_rapl()
 
@@ -382,6 +409,12 @@ APP = App()
 # Set by the SIGTERM/SIGINT handler; checked by the render loop.
 _STOP = False
 
+def _nvme_temp(s, index):
+    """Temperature of the index-th NVMe drive, or None when absent."""
+    temps = s["nvme_temps"]
+    return temps[index] if len(temps) > index else None
+
+
 WIDGETS = [
     # --- Row 0: CPU ---
     (0, 0, "UTIL", "pct",  lambda a, s: s["cpu_pct"], 60, 85),
@@ -410,27 +443,25 @@ WIDGETS = [
     # --- Row 2: System ---
     (2, 0, "RAM",  "pct",  lambda a, s: s["ram"].percent, 70, 90),
     (2, 1, "MEM",  "gb",   lambda a, s: s["ram"].used / 1024 ** 3, 0, 0),
-    (2, 2, "NV1",  "temp", lambda a, s: (
-        s["nvme_temps"][0] if len(s["nvme_temps"]) > 0 else None), 70, 80),
-    (2, 3, "NV2",  "temp", lambda a, s: (
-        s["nvme_temps"][1] if len(s["nvme_temps"]) > 1 else None), 70, 80),
-    (2, 4, "PSU",  "w",    lambda a, s: s["psu_w"], PSU_W_WARN, PSU_W_CRIT),
-    (2, 5, "VRM",  "temp", lambda a, s: s["psu_vrm"], 55, 65),
-    (2, 6, "12V",  "v",    lambda a, s: s["rail12"], 0, 0),
+    (2, 2, "NV1",  "temp", lambda a, s: _nvme_temp(s, 0), 70, 80),
+    (2, 3, "NV2",  "temp", lambda a, s: _nvme_temp(s, 1), 70, 80),
+    (2, 4, "NV3",  "temp", lambda a, s: _nvme_temp(s, 2), 70, 80),
+    (2, 5, "PSU",  "w",    lambda a, s: s["psu_w"], PSU_W_WARN, PSU_W_CRIT),
+    (2, 6, "VRM",  "temp", lambda a, s: s["psu_vrm"], 55, 65),
     (2, 7, "FAN",  "pct",  lambda a, s: s["psu_fan_pct"], 70, 90),
     # --- Row 3: Linux ---
-    (3, 0, "LOAD1", "load", lambda a, s: s["load"][0], 0, 0),
-    (3, 1, "LOAD5", "load", lambda a, s: s["load"][1], 0, 0),
-    (3, 2, "DOWN",  "rate", lambda a, s: a.rate(
+    (3, 0, "LOAD",  "loadpair", lambda a, s: tuple(s["load"]), 0, 0),
+    (3, 1, "DOWN",  "rate", lambda a, s: a.rate(
         "net_rx", s["net_rx"], s["t"]), 0, 0),
-    (3, 3, "UP",    "rate", lambda a, s: a.rate(
+    (3, 2, "UP",    "rate", lambda a, s: a.rate(
         "net_tx", s["net_tx"], s["t"]), 0, 0),
-    (3, 4, "READ",  "rate", lambda a, s: a.rate(
+    (3, 3, "READ",  "rate", lambda a, s: a.rate(
         "disk_r", s["disk_r"], s["t"]), 0, 0),
-    (3, 5, "WRITE", "rate", lambda a, s: a.rate(
+    (3, 4, "WRITE", "rate", lambda a, s: a.rate(
         "disk_w", s["disk_w"], s["t"]), 0, 0),
-    (3, 6, "UPT",   "upt",  lambda a, s: time.monotonic(), 0, 0),
-    (3, 7, "TIME",  "time", lambda a, s: datetime.now().strftime("%H:%M"), 0, 0),
+    (3, 5, "UPT",   "upt",  lambda a, s: time.monotonic(), 0, 0),
+    (3, 6, "TIME",  "time", lambda a, s: datetime.now().strftime("%H:%M"), 0, 0),
+    (3, 7, "12V",   "v",    lambda a, s: s["rail12"], 0, 0),
 ]
 
 
@@ -471,8 +502,18 @@ def key_color(v, warn, crit):
 
 def render_key(label, kind, value, warn=0, crit=0) -> Image.Image:
     """Render a 96x96 key following the graphic rules."""
+    sub = None          # small secondary line under the main value
+    value_y = 24
+    size_max = 40
     if value is None:
         text, ratio, color = "--", None, COL_OFF
+    elif kind == "loadpair":
+        # (1 min, 5 min): the 1 min value leads, the 5 min one goes underneath
+        load1, load5 = value
+        text = "--" if load1 is None else f"{load1:.2f}"
+        sub = None if load5 is None else f"5m {load5:.2f}"
+        ratio, color = None, COL_VALUE
+        value_y, size_max = 18, 34
     else:
         ratio = None
         color = COL_VALUE
@@ -510,12 +551,17 @@ def render_key(label, kind, value, warn=0, crit=0) -> Image.Image:
     d = ImageDraw.Draw(img)
     d.text((6, 4), label, font=font(14), fill=COL_TITLE)
 
-    size = 40
+    size = size_max
     while size > 20 and d.textlength(text, font=font(size)) > 84:
         size -= 2
     f_val = font(size)
     w = d.textlength(text, font=f_val)
-    d.text(((KEY_W - w) / 2, 24), text, font=f_val, fill=color)
+    d.text(((KEY_W - w) / 2, value_y), text, font=f_val, fill=color)
+
+    if sub:
+        f_sub = font(13)
+        w = d.textlength(sub, font=f_sub)
+        d.text(((KEY_W - w) / 2, 70), sub, font=f_sub, fill=COL_TITLE)
 
     if ratio is not None:  # bar only on UTIL/VRAM/RAM/FAN
         d.rounded_rectangle((6, 78, 90, 90), radius=5, fill=COL_TRACK)
@@ -603,7 +649,7 @@ def main():
     manager = DeviceManager()
     print("Sensors:", {
         "cpu_temp": hwmon_name(CPUTEMP),
-        "nvme": len(NVMES),
+        "nvme": [hwmon_controller(h) or h.name for h in NVMES],
         "psu": hwmon_name(CORSAIR),
         "rapl": RAPL is not None,
     })
@@ -681,7 +727,7 @@ def preview():
         "cpu_pct": 57, "cpu_temp": 61.2, "ccd1_temp": 52.0, "cpu_clk": 5.24,
         "gpu": {"temp": 68.0, "util": 94, "fan": 55, "power": 412.0,
                 "mem_used": 28950.0, "mem_total": 32607.0, "clk": 2.86},
-        "nvme_temps": [41.0, 35.0],
+        "nvme_temps": [41.0, 35.0, 29.0],
         "psu_w": 510.0, "psu_vrm": 47.0,
         "psu_fan_pct": 34, "psu_fan_rpm": 368, "rail12": 12.06,
         "ram": ram(percent=46, used=12.4 * 1024 ** 3),
