@@ -20,9 +20,12 @@ Graphic rules:
   - a unit in the top-right corner only for values that carry no unit of their
     own (MB/s rates); it is dropped when it would collide with the label
   - bar only on UTIL/VRAM/RAM/FAN %  (bottom zone, priority over the others)
-  - otherwise a sub-line (a total, a 5 min load) or a sparkline
+  - a sub-line carries the total (MEM) or the 5 min load (LOAD)
+  - a sparkline carries the last ~1 min of the keys with a free bottom zone
   - temperatures: green normal -> yellow -> red
-  - LOAD carries the 1 min average, with the 5 min one as a small second line
+  - a key at its crit threshold also gets a dark red background tint
+  - LOAD shows the 1 min average large with the 5 min one as a small sub-line,
+    colored by load / core count; 12V is colored by its deviation from 12.00 V
 
 Usage:
   deck_stats.py            run the monitor
@@ -139,7 +142,7 @@ COL_OK = (61, 220, 132)
 COL_WARN = (255, 179, 64)
 COL_CRIT = (255, 82, 82)
 
-# One accent colour per row, drawn as a 3 px strip on the top edge of every key
+# One accent color per row, drawn as a 3 px strip on the top edge of every key
 # so the four groups stay recognisable at a glance. Deliberately outside the
 # green/amber/red family, which is reserved for status.
 ROW_ACCENT = {
@@ -615,14 +618,14 @@ def ratio_color(ratio, warn, crit):
 
 
 def load_color(value):
-    """LOAD colour from load / core count (warn >= 70 %, crit >= 100 %)."""
+    """LOAD color from load / core count (warn >= 70 %, crit >= 100 %)."""
     if value is None:
         return COL_OFF
     return ratio_color(value / CPU_COUNT, LOAD_WARN_RATIO, LOAD_CRIT_RATIO)
 
 
 def rail_color(value):
-    """12 V colour from the relative deviation from 12.00 V."""
+    """12 V color from the relative deviation from 12.00 V."""
     if value is None:
         return COL_OFF
     dev_pct = abs(value - RAIL12_NOMINAL) / RAIL12_NOMINAL * 100.0
@@ -723,7 +726,7 @@ def render_key(label, kind, value, warn=0, crit=0, row=None, unit=None,
     cy = 44 if has_bottom else 54
 
     # A key that reached its critical threshold gets a dark red background so
-    # the state is visible from across the room, not just from the glyph colour.
+    # the state is visible from across the room, not just from the glyph color.
     bg = COL_BG
     if crit and kind in TINTED_KINDS and value is not None and value >= crit:
         bg = COL_BG_CRIT
