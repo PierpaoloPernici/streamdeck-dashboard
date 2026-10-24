@@ -526,6 +526,8 @@ def render_key(label, kind, value, warn=0, crit=0) -> Image.Image:
             color = key_color(value, warn, crit)
         elif kind == "w":
             text = f"{value:.0f}W"
+            # crit == 0 means "no thresholds" (key_color would return CRIT)
+            color = key_color(value, warn, crit) if crit else COL_VALUE
         elif kind == "ghz":
             text = f"{value:.1f}G"
         elif kind == "gb":
