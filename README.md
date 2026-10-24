@@ -11,29 +11,73 @@ hwmon and `nvidia-smi`.
 ## Layout
 
 ```
-ROW 0  CPU     UTIL | TEMP | CCD1 | CLK | PWR | LOAD | MAX | PROC
-ROW 1  GPU     UTIL | TEMP | VRAM | MEM | PWR | FAN  | CLK | MAX
-ROW 2  SYSTEM  RAM  | MEM  | NV1  | NV2 | NV3 | PSU  | VRM | FAN
-ROW 3  LINUX   LOAD | DOWN | UP   | READ|WRITE| 12V  | UPT | TIME
+        0     1     2     3     4     5     6     7
+CPU     UTIL  TEMP  MAX   CLK   PWR   LOAD  CCD1  CORE
+GPU     UTIL  TEMP  MAX   CLK   PWR   FAN   VRAM  MEM
+SYSTEM  TIME  NV1   NV2   NV3   DSK   SWAP  RAM   MEM
+I/O+PSU DOWN  UP    READ  WRITE PSU   FAN   VRM   12V
 ```
+
+Columns 0–4 of the CPU and GPU rows carry the same metric in the same column,
+so the two rows read as one table and a value can be compared vertically. `PSU`
+sits under the two `PWR` keys (all watts) and the PSU `FAN` under the GPU `FAN`.
+Row 3 is I/O on the left and power supply on the right.
 
 ## Graphic rules
 
 - 4–6 char label on top, small; large centered value
+- Value typeset in DejaVu Sans **Condensed** Bold when the distro ships it
+  (plain Bold otherwise), so 5-character values such as `28.3G` or `412W`
+  still render at 30 px or more
 - Unit inside the value, not in the label: `45°` `66W` `3.7G` `2.8G`
+- A separate unit sits in the top-right corner only where the value carries none
+  of its own — the rates: `DOWN` `UP` `READ` `WRITE` show `MB/s`. If the label
+  plus the unit would not fit, the unit is dropped for that key only
 - `LOAD` shows the 1 min average large, with the 5 min one as a small second line
-- Colored bar **only** on UTIL, VRAM, RAM and FAN %
-- Temperatures: white normal → yellow → red
+- `TIME` shows the clock large, with the uptime underneath: `up 3d 04h`,
+  `up 4h 07m`, `up 12m`. Uptime comes from `psutil.boot_time()`, so it also
+  covers suspend time (a `time.monotonic()` uptime would not)
+- `MEM` (GPU), `MEM` (RAM) and `DSK` show the total as a small second line:
+  `28.3G` over `/32G`, `842.1G` over `/1863G`. A missing total means no line,
+  never a fake one
+- `DSK` is the free space on `/` — what a normal user can still write, not
+  counting the reserve the root filesystem keeps for itself
+- Colored bar **only** on UTIL, CORE, VRAM, RAM, SWAP and FAN %
+- **Sparkline** (last 40 samples, ~1 min at 1.5 s) in the bottom zone of the
+  keys that would otherwise leave it empty: CPU/GPU `TEMP`, CPU/GPU `PWR`,
+  `PSU`, `DOWN`, `UP`, `READ`, `WRITE`. The bottom zone holds exactly one thing,
+  in priority order: bar → sub-line → sparkline. The line is scaled min-max over
+  the window, with a minimum span of 1 % of the value so a flat series stays flat
+  instead of blowing up sensor noise, and it is drawn in the key's current color
+- A 3 px accent strip on the top edge of every key marks its group:
+  blue = CPU row, violet = GPU row, cyan = SYSTEM row, gray = `TIME` (a clock,
+  not a system metric) and the I/O keys, pink = the power-supply half of row 3.
+  These hues are outside the green/amber/red family on purpose, which is
+  reserved for status
+- `UTIL` is the average load across all threads; `CORE` is the busiest single
+  logical CPU. On a wide CPU the two tell different stories: 3 % average can
+  still mean one thread pinned at 100 %. `CORE` is amber from 90 %, and
+  deliberately **never red**: one saturated thread is normal, not an alarm
+- Temperatures: green normal → yellow → red
+- `LOAD` has no absolute warning level: it is normalised by core count, yellow
+  from 70 % of the cores, red from 100 %. The 5 min average stays a gray sub-line
+- `12V` is colored by the deviation from 12.00 V: yellow from 5 %, red from 8 %
+- `SWAP` is yellow from 50 % and red from 80 % — in use at all is the signal,
+  saturating it is the alarm
+- A key that reaches its critical threshold also gets a dark red background
+  tint, so the alarm survives the distance
 - `--` = sensor unavailable at that moment (never a placeholder `0`)
 
 ## Data sources
 
 | Group | Sources |
 |---|---|
-| CPU | `psutil` (load), `k10temp` or `coretemp` hwmon (Tctl/CCD1), RAPL (power), cpufreq (clock) |
+| CPU | `psutil.cpu_percent` (UTIL average, CORE busiest thread), `/proc/loadavg` (LOAD, 1 and 5 min), `k10temp` or `coretemp` hwmon (TEMP, CCD1), RAPL (PWR), cpufreq (max core CLK) |
 | GPU | `nvidia-smi` (util, temp, VRAM, power, fan, clock) |
-| System | RAM/CPU load, up to 3 NVMe hwmon temperatures (NV1–NV3), `corsairpsu` hwmon *(optional: power, VRM, fan, 12 V rail)* |
-| Linux | `/proc/loadavg`, `/proc/net/dev`, `/proc/diskstats`, `psutil.pids()`, clock |
+| SYSTEM | RAM/swap (`psutil.virtual_memory`, `psutil.swap_memory`), NVMe hwmon temperatures (NV1–NV3), `os.statvfs("/")` (DSK: free space) |
+| I/O | `/proc/net/dev` (DOWN, UP), `/proc/diskstats` (READ, WRITE) |
+| PSU | `corsairpsu` hwmon *(optional: power, VRM, fan, 12 V rail)* |
+| Clock | local time, `psutil.boot_time()` (uptime, suspend-aware) |
 
 Everything is auto-detected: the CPU temperature chip, the RAPL package
 domain, the NVMe drives and the PSU are looked up at startup and reported on
@@ -86,6 +130,8 @@ journalctl --user -u deck-stats -f         # live logs
 
 - Fixed-rate loop: the interval is measured with `time.monotonic()`, so slow
   ticks do not accumulate drift. `nvidia-smi` costs ~50 ms per tick.
+- `CLK` is the highest current core clock across all cores (`scaling_cur_freq`),
+  not `cpu0`: the sampler's own core is a poor proxy for boost.
 - `MAX` is a rolling peak over `DECK_PEAK_WINDOW`, not an all-time maximum, so
   an old spike does not pin the key forever.
 - Rates (DOWN/UP/READ/WRITE) start from the second tick (the first one samples
