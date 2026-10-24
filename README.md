@@ -26,6 +26,9 @@ ROW 3  LINUX   LOAD | DOWN | UP   | READ|WRITE| 12V  | UPT | TIME
 - Unit inside the value, not in the label: `45°` `66W` `3.7G` `2.8G`
 - `LOAD` shows the 1 min average large, with the 5 min one as a small second line
 - Colored bar **only** on UTIL, VRAM, RAM and FAN %
+- A 3 px accent strip on the top edge of every key marks the row:
+  blue = CPU, violet = GPU, cyan = SYSTEM, gray = LINUX. These hues are
+  outside the green/amber/red family on purpose, which is reserved for status
 - Temperatures: green normal → yellow → red
 - A key that reaches its critical threshold also gets a dark red background
   tint, so the alarm survives the distance

@@ -116,6 +116,16 @@ COL_OK = (61, 220, 132)
 COL_WARN = (255, 179, 64)
 COL_CRIT = (255, 82, 82)
 
+# One accent colour per row, drawn as a 3 px strip on the top edge of every key
+# so the four groups stay recognisable at a glance. Deliberately outside the
+# green/amber/red family, which is reserved for status.
+ROW_ACCENT = {
+    0: (72, 132, 214),      # CPU     blue
+    1: (150, 108, 220),     # GPU     violet
+    2: (56, 170, 190),      # SYSTEM  cyan
+    3: (128, 128, 138),     # LINUX   gray
+}
+
 # Power thresholds are derived from the machine's own limits (see env vars).
 GPU_POWER_MAX = _env_num("DECK_GPU_POWER_MAX", 550.0)
 PSU_POWER_MAX = _env_num("DECK_PSU_POWER_MAX", 650.0)
@@ -515,7 +525,7 @@ def key_color(v, warn, crit):
 TINTED_KINDS = ("pct", "temp", "peak", "w")
 
 
-def render_key(label, kind, value, warn=0, crit=0) -> Image.Image:
+def render_key(label, kind, value, warn=0, crit=0, row=None) -> Image.Image:
     """Render a 96x96 key following the graphic rules."""
     sub = None          # small secondary line under the main value
     size_max = 40
@@ -575,7 +585,9 @@ def render_key(label, kind, value, warn=0, crit=0) -> Image.Image:
 
     img = Image.new("RGB", (KEY_W, KEY_H), bg)
     d = ImageDraw.Draw(img)
-    d.text((6, 4), label, font=font(14), fill=COL_TITLE)
+    if row is not None:
+        d.rectangle((0, 0, KEY_W, 2), fill=ROW_ACCENT[row])   # 3 px row accent
+    d.text((6, 6), label, font=font(14), fill=COL_TITLE)
 
     size = size_max
     while size > 20 and d.textlength(text, font=font(size)) > VALUE_MAX_W:
@@ -619,7 +631,7 @@ def run(deck):
                 except Exception as e:
                     print(f"[{label}] {e}", file=sys.stderr)
                     value = None
-                img = render_key(label, kind, value, warn, crit)
+                img = render_key(label, kind, value, warn, crit, row=row)
                 key = row * COLS + col
                 try:
                     deck.set_key_image(
@@ -780,7 +792,7 @@ def preview():
             value = 3 * 86400 + 4 * 3600
         if kind == "time":
             value = "08:45"
-        img = render_key(label, kind, value, warn, crit)
+        img = render_key(label, kind, value, warn, crit, row=row)
         key_imgs.append(img)
         grid.paste(img, (col * KEY_W, row * KEY_H))
         print(f"  ({row},{col}) {label:6s} {kind:5s} -> {value}")
