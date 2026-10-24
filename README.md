@@ -20,6 +20,9 @@ ROW 3  LINUX   LOAD | DOWN | UP   | READ|WRITE| 12V  | UPT | TIME
 ## Graphic rules
 
 - 4–6 char label on top, small; large centered value
+- Value typeset in DejaVu Sans **Condensed** Bold when the distro ships it
+  (plain Bold otherwise), so 5-character values such as `28.3G` or `412W`
+  still render at 30 px or more
 - Unit inside the value, not in the label: `45°` `66W` `3.7G` `2.8G`
 - `LOAD` shows the 1 min average large, with the 5 min one as a small second line
 - Colored bar **only** on UTIL, VRAM, RAM and FAN %

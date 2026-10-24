@@ -60,7 +60,12 @@ PEAK_WINDOW = _env_num("DECK_PEAK_WINDOW", 3600.0)   # rolling peak horizon (s)
 KEY_W, KEY_H = 96, 96
 COLS = 8
 
-# DejaVu Sans is looked up in the usual per-distro locations (see _FONT_DIRS).
+# Horizontal budget for the big value: 3 px of margin per side. The value is
+# centred, the label sits above it, so nothing else competes for this width.
+VALUE_MAX_W = KEY_W - 6
+
+# DejaVu Sans (condensed where available) is looked up in the usual per-distro
+# locations (see _FONT_DIRS).
 _FONT_DIRS = (
     "/usr/share/fonts/TTF",                     # Arch
     "/usr/share/fonts/truetype/dejavu",         # Debian / Ubuntu
@@ -80,7 +85,11 @@ def _find_font(filename):
     return None
 
 
-FONT_BOLD_FILE = _find_font("DejaVuSans-Bold.ttf")
+# Condensed first: it fits the same string in a larger point size on a 96 px
+# key ("28.3G", "412W"), which is what makes the values readable at arm's length.
+# Per-distro locations live in _FONT_DIRS.
+FONT_BOLD_FILE = (_find_font("DejaVuSansCondensed-Bold.ttf")
+                  or _find_font("DejaVuSans-Bold.ttf"))
 
 
 @functools.lru_cache(maxsize=64)
@@ -557,7 +566,7 @@ def render_key(label, kind, value, warn=0, crit=0) -> Image.Image:
     d.text((6, 4), label, font=font(14), fill=COL_TITLE)
 
     size = size_max
-    while size > 20 and d.textlength(text, font=font(size)) > 84:
+    while size > 20 and d.textlength(text, font=font(size)) > VALUE_MAX_W:
         size -= 2
     f_val = font(size)
     # anchor="mm" pins the optical centre, so keys where the font had to shrink
