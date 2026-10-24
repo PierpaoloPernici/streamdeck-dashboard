@@ -6,10 +6,22 @@
   Row 2  SYSTEM RAM  | MEM  | NV1  | NV2 | NV3 | PSU | VRM  | FAN
   Row 3  LINUX  LOAD | DOWN | UP   | READ|WRITE| 12V | UPT | TIME
 
+Key layout (96x96 px):
+
+  +-----------------+
+  |#################|  3 px row accent strip (see ROW_ACCENT)
+  | LABEL      UNIT |  label top-left, optional unit top-right (right of x=90)
+  |      VALUE      |  large value, optically centred
+  |      bottom     |  exactly one of: bar | sub-line | sparkline
+  +-----------------+
+
 Graphic rules:
   - 4-6 char label on top, large centered value, unit inside the value (45° 66W 3.7G)
-  - bar only on UTIL/VRAM/RAM/FAN %
-  - temperatures: white normal -> yellow -> red
+  - a unit in the top-right corner only for values that carry no unit of their
+    own (MB/s rates); it is dropped when it would collide with the label
+  - bar only on UTIL/VRAM/RAM/FAN %  (bottom zone, priority over the others)
+  - otherwise a sub-line (a total, a 5 min load) or a sparkline
+  - temperatures: green normal -> yellow -> red
   - LOAD carries the 1 min average, with the 5 min one as a small second line
 
 Usage:
@@ -63,6 +75,14 @@ COLS = 8
 # Horizontal budget for the big value: 3 px of margin per side. The value is
 # centred, the label sits above it, so nothing else competes for this width.
 VALUE_MAX_W = KEY_W - 6
+
+# Layout zones inside a key (see the module docstring).
+LABEL_XY = (6, 6)           # top-left, under the row accent strip
+LABEL_SIZE = 14
+UNIT_XY = (90, 14)          # top-right, vertically centred on the label
+UNIT_SIZE = 11
+SUB_CY = 78                 # sub-line centre, bottom zone
+BAR_BOX = (6, 78, 90, 90)   # bar, bottom zone
 
 # DejaVu Sans (condensed where available) is looked up in the usual per-distro
 # locations (see _FONT_DIRS).
@@ -484,6 +504,20 @@ WIDGETS = [
     (3, 7, "TIME",  "time", lambda a, s: datetime.now().strftime("%H:%M"), 0, 0),
 ]
 
+# Per-key data that is not part of the WIDGETS tuple, keyed by (row, col).
+
+# Top-right unit, drawn in COL_TITLE at size 11 when it fits next to the label.
+UNITS = {
+    (3, 1): "MB/s",     # DOWN
+    (3, 2): "MB/s",     # UP
+    (3, 3): "MB/s",     # READ
+    (3, 4): "MB/s",     # WRITE
+}
+
+# Bottom-zone sub-line: callable(App, sample) -> str | None. None means "draw
+# nothing", which is also the answer for a missing sensor (never a fake total).
+SUBS = {}
+
 
 # ---------------- Formatting ----------------
 
@@ -525,9 +559,25 @@ def key_color(v, warn, crit):
 TINTED_KINDS = ("pct", "temp", "peak", "w")
 
 
-def render_key(label, kind, value, warn=0, crit=0, row=None) -> Image.Image:
-    """Render a 96x96 key following the graphic rules."""
-    sub = None          # small secondary line under the main value
+def resolve_sub(row, col, s):
+    """Sub-line for one key, or None when it has none / the data is missing."""
+    fn = SUBS.get((row, col))
+    if fn is None:
+        return None
+    try:
+        return fn(APP, s)
+    except Exception:
+        return None
+
+
+def render_key(label, kind, value, warn=0, crit=0, row=None, unit=None,
+               sub=None, history=None) -> Image.Image:
+    """Render a 96x96 key following the graphic rules.
+
+    row/unit/sub/history come from the per-key dicts (ROW_ACCENT, UNITS, SUBS,
+    App.history) and are all optional: without them the key falls back to the
+    plain label + value layout.
+    """
     size_max = 40
     if value is None:
         text, ratio, color = "--", None, COL_OFF
@@ -535,7 +585,8 @@ def render_key(label, kind, value, warn=0, crit=0, row=None) -> Image.Image:
         # (1 min, 5 min): the 1 min value leads, the 5 min one goes underneath
         load1, load5 = value
         text = "--" if load1 is None else f"{load1:.2f}"
-        sub = None if load5 is None else f"5m {load5:.2f}"
+        if sub is None and load5 is not None:
+            sub = f"5m {load5:.2f}"       # same bottom-zone path as SUBS
         ratio, color = None, COL_VALUE
         size_max = 34
     else:
@@ -574,8 +625,9 @@ def render_key(label, kind, value, warn=0, crit=0, row=None) -> Image.Image:
             text = f"{value}"
 
     # Vertical centre of the value. Keys that also draw something in the
-    # bottom zone (bar or sub-line) sit a little higher to leave room for it.
-    cy = 44 if (ratio is not None or sub is not None) else 54
+    # bottom zone (bar, sub-line or sparkline) sit a little higher.
+    has_bottom = ratio is not None or sub is not None or history is not None
+    cy = 44 if has_bottom else 54
 
     # A key that reached its critical threshold gets a dark red background so
     # the state is visible from across the room, not just from the glyph colour.
@@ -587,7 +639,16 @@ def render_key(label, kind, value, warn=0, crit=0, row=None) -> Image.Image:
     d = ImageDraw.Draw(img)
     if row is not None:
         d.rectangle((0, 0, KEY_W, 2), fill=ROW_ACCENT[row])   # 3 px row accent
-    d.text((6, 6), label, font=font(14), fill=COL_TITLE)
+    f_label = font(LABEL_SIZE)
+    d.text(LABEL_XY, label, font=f_label, fill=COL_TITLE)
+
+    # Top-right unit, dropped for this key only when the label would collide.
+    if unit:
+        f_unit = font(UNIT_SIZE)
+        gap = 4
+        room = UNIT_XY[0] - LABEL_XY[0] - d.textlength(label, font=f_label)
+        if d.textlength(unit, font=f_unit) + gap <= room:
+            d.text(UNIT_XY, unit, font=f_unit, fill=COL_TITLE, anchor="rm")
 
     size = size_max
     while size > 20 and d.textlength(text, font=font(size)) > VALUE_MAX_W:
@@ -597,18 +658,18 @@ def render_key(label, kind, value, warn=0, crit=0, row=None) -> Image.Image:
     # ("28.3G") line up with the ones that did not ("45K").
     d.text((KEY_W / 2, cy), text, font=f_val, fill=color, anchor="mm")
 
-    if sub:
-        f_sub = font(13)
-        w = d.textlength(sub, font=f_sub)
-        d.text(((KEY_W - w) / 2, 70), sub, font=f_sub, fill=COL_TITLE)
-
     if ratio is not None:  # bar only on UTIL/VRAM/RAM/FAN
-        d.rounded_rectangle((6, 78, 90, 90), radius=5, fill=COL_TRACK)
-        fill_w = int(84 * ratio)
+        d.rounded_rectangle(BAR_BOX, radius=5, fill=COL_TRACK)
+        fill_w = int((BAR_BOX[2] - BAR_BOX[0]) * ratio)
         if fill_w >= 10:
-            d.rounded_rectangle((6, 78, 6 + fill_w, 90), radius=5, fill=color)
+            d.rounded_rectangle((BAR_BOX[0], BAR_BOX[1], BAR_BOX[0] + fill_w,
+                                 BAR_BOX[3]), radius=5, fill=color)
         elif fill_w > 0:
-            d.rectangle((6, 78, 6 + fill_w, 90), fill=color)
+            d.rectangle((BAR_BOX[0], BAR_BOX[1], BAR_BOX[0] + fill_w,
+                         BAR_BOX[3]), fill=color)
+    elif sub:              # bottom zone: bar wins, then the sub-line
+        d.text((KEY_W / 2, SUB_CY), sub, font=font(13), fill=COL_TITLE,
+               anchor="mm")
 
     return img
 
@@ -631,7 +692,9 @@ def run(deck):
                 except Exception as e:
                     print(f"[{label}] {e}", file=sys.stderr)
                     value = None
-                img = render_key(label, kind, value, warn, crit, row=row)
+                img = render_key(label, kind, value, warn, crit, row=row,
+                                 unit=UNITS.get((row, col)),
+                                 sub=resolve_sub(row, col, s))
                 key = row * COLS + col
                 try:
                     deck.set_key_image(
@@ -792,7 +855,9 @@ def preview():
             value = 3 * 86400 + 4 * 3600
         if kind == "time":
             value = "08:45"
-        img = render_key(label, kind, value, warn, crit, row=row)
+        img = render_key(label, kind, value, warn, crit, row=row,
+                         unit=UNITS.get((row, col)),
+                         sub=resolve_sub(row, col, s))
         key_imgs.append(img)
         grid.paste(img, (col * KEY_W, row * KEY_H))
         print(f"  ({row},{col}) {label:6s} {kind:5s} -> {value}")

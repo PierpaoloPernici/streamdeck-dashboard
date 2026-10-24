@@ -24,6 +24,9 @@ ROW 3  LINUX   LOAD | DOWN | UP   | READ|WRITE| 12V  | UPT | TIME
   (plain Bold otherwise), so 5-character values such as `28.3G` or `412W`
   still render at 30 px or more
 - Unit inside the value, not in the label: `45°` `66W` `3.7G` `2.8G`
+- A separate unit sits in the top-right corner only where the value carries none
+  of its own — the rates: `DOWN` `UP` `READ` `WRITE` show `MB/s`. If the label
+  plus the unit would not fit, the unit is dropped for that key only
 - `LOAD` shows the 1 min average large, with the 5 min one as a small second line
 - Colored bar **only** on UTIL, VRAM, RAM and FAN %
 - A 3 px accent strip on the top edge of every key marks the row:
