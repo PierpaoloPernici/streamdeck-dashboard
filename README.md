@@ -11,15 +11,17 @@ hwmon and `nvidia-smi`.
 ## Layout
 
 ```
-ROW 0  CPU     UTIL | TEMP | CCD2 | CLK | PWR | LOAD | MAX | SWAP
-ROW 1  GPU     UTIL | TEMP | VRAM | MEM | PWR | FAN  | CLK | MAX
-ROW 2  SYSTEM  RAM  | MEM  | NV1  | NV2 | NV3 | PSU  | VRM | FAN
-ROW 3  LINUX   DSK  | DOWN | UP   | READ|WRITE| 12V  | UPT | TIME
+        0     1     2     3     4     5     6     7
+CPU     UTIL  TEMP  MAX   CLK   PWR   LOAD  CCD1  CCD2
+GPU     UTIL  TEMP  MAX   CLK   PWR   FAN   VRAM  MEM
+SYSTEM  TIME  NV1   NV2   NV3   DSK   SWAP  RAM   MEM
+I/O+PSU DOWN  UP    READ  WRITE PSU   FAN   VRM   12V
 ```
 
-The CCD key is `CCD2` when the CPU exposes a second CCD (`temp4_input` on
-`k10temp`), `CCD1` otherwise: on a dual-CCD Ryzen 9, CCD1 is nearly a copy of
-`TEMP` (Tctl), while CCD2 is the half nobody watches.
+Columns 0–4 of the CPU and GPU rows carry the same metric in the same column,
+so the two rows read as one table and a value can be compared vertically. `PSU`
+sits under the two `PWR` keys (all watts) and the PSU `FAN` under the GPU `FAN`.
+Row 3 is I/O on the left and power supply on the right.
 
 ## Graphic rules
 
@@ -32,6 +34,9 @@ The CCD key is `CCD2` when the CPU exposes a second CCD (`temp4_input` on
   of its own — the rates: `DOWN` `UP` `READ` `WRITE` show `MB/s`. If the label
   plus the unit would not fit, the unit is dropped for that key only
 - `LOAD` shows the 1 min average large, with the 5 min one as a small second line
+- `TIME` shows the clock large, with the uptime underneath: `up 3d 04h`,
+  `up 4h 07m`, `up 12m`. Uptime comes from `psutil.boot_time()`, so it also
+  covers suspend time (a `time.monotonic()` uptime would not)
 - `MEM` (GPU), `MEM` (RAM) and `DSK` show the total as a small second line:
   `28.3G` over `/32G`, `842.1G` over `/1863G`. A missing total means no line,
   never a fake one
@@ -44,9 +49,14 @@ The CCD key is `CCD2` when the CPU exposes a second CCD (`temp4_input` on
   in priority order: bar → sub-line → sparkline. The line is scaled min-max over
   the window, with a minimum span of 1 % of the value so a flat series stays flat
   instead of blowing up sensor noise, and it is drawn in the key's current color
-- A 3 px accent strip on the top edge of every key marks the row:
-  blue = CPU, violet = GPU, cyan = SYSTEM, gray = LINUX. These hues are
-  outside the green/amber/red family on purpose, which is reserved for status
+- A 3 px accent strip on the top edge of every key marks its group:
+  blue = CPU row, violet = GPU row, cyan = SYSTEM row, gray = `TIME` (a clock,
+  not a system metric) and the I/O keys, pink = the power-supply half of row 3.
+  These hues are outside the green/amber/red family on purpose, which is
+  reserved for status
+- `CCD2` reads the `k10temp` sensor labelled `Tccd2` and shows `--` when the CPU
+  has a single CCD (or is not an AMD with `k10temp`): it never falls back to
+  another sensor, so a `--` there really means "this CPU has no second CCD"
 - Temperatures: green normal → yellow → red
 - `LOAD` has no absolute warning level: it is normalised by core count, yellow
   from 70 % of the cores, red from 100 %. The 5 min average stays a gray sub-line
@@ -61,10 +71,12 @@ The CCD key is `CCD2` when the CPU exposes a second CCD (`temp4_input` on
 
 | Group | Sources |
 |---|---|
-| CPU | `psutil` (load), `k10temp` or `coretemp` hwmon (Tctl/CCD2), RAPL (power), cpufreq (max core clock) |
+| CPU | `psutil` (UTIL), `/proc/loadavg` (LOAD, 1 and 5 min), `k10temp` or `coretemp` hwmon (TEMP, CCD1, CCD2), RAPL (PWR), cpufreq (max core CLK) |
 | GPU | `nvidia-smi` (util, temp, VRAM, power, fan, clock) |
-| System | RAM/swap (`psutil.virtual_memory`, `psutil.swap_memory`), up to 3 NVMe hwmon temperatures (NV1–NV3), `corsairpsu` hwmon *(optional: power, VRM, fan, 12 V rail)* |
-| Linux | `/proc/loadavg`, `/proc/net/dev`, `/proc/diskstats`, `os.statvfs("/")` (DSK: free space), `psutil.boot_time()` (uptime, suspend-aware), clock |
+| SYSTEM | RAM/swap (`psutil.virtual_memory`, `psutil.swap_memory`), NVMe hwmon temperatures (NV1–NV3), `os.statvfs("/")` (DSK: free space) |
+| I/O | `/proc/net/dev` (DOWN, UP), `/proc/diskstats` (READ, WRITE) |
+| PSU | `corsairpsu` hwmon *(optional: power, VRM, fan, 12 V rail)* |
+| Clock | local time, `psutil.boot_time()` (uptime, suspend-aware) |
 
 Everything is auto-detected: the CPU temperature chip, the RAPL package
 domain, the NVMe drives and the PSU are looked up at startup and reported on
@@ -144,7 +156,7 @@ Corsair PSU); other hardware works, some keys fall back:
 | Key | Intended | Fallback when unavailable |
 |---|---|---|
 | CPU PWR | RAPL package power | **PSU total − GPU** (rest of the system) if the counter is unreadable |
-| CPU CCD | CCD2 temperature | **CCD1** on CPUs with a single CCD (8-core X3D parts, most Intel) |
+| CPU CCD2 | second CCD temperature (`Tccd2`) | **`--`** on CPUs with a single CCD (8-core X3D parts, most Intel) |
 | CPU FAN | motherboard fan | no fan sensor on the MSI board → uses the PSU fan (pwm %) |
 | CPU 12V | vcore | vcore not exposed → **PSU 12V rail** |
 | GPU MAX | hotspot | hotspot not exposed by `nvidia-smi` → rolling peak of GPU temp |
