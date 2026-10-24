@@ -12,7 +12,7 @@ hwmon and `nvidia-smi`.
 
 ```
         0     1     2     3     4     5     6     7
-CPU     UTIL  TEMP  MAX   CLK   PWR   LOAD  CCD1  CCD2
+CPU     UTIL  TEMP  MAX   CLK   PWR   LOAD  CCD1  CORE
 GPU     UTIL  TEMP  MAX   CLK   PWR   FAN   VRAM  MEM
 SYSTEM  TIME  NV1   NV2   NV3   DSK   SWAP  RAM   MEM
 I/O+PSU DOWN  UP    READ  WRITE PSU   FAN   VRM   12V
@@ -42,7 +42,7 @@ Row 3 is I/O on the left and power supply on the right.
   never a fake one
 - `DSK` is the free space on `/` — what a normal user can still write, not
   counting the reserve the root filesystem keeps for itself
-- Colored bar **only** on UTIL, VRAM, RAM, SWAP and FAN %
+- Colored bar **only** on UTIL, CORE, VRAM, RAM, SWAP and FAN %
 - **Sparkline** (last 40 samples, ~1 min at 1.5 s) in the bottom zone of the
   keys that would otherwise leave it empty: CPU/GPU `TEMP`, CPU/GPU `PWR`,
   `PSU`, `DOWN`, `UP`, `READ`, `WRITE`. The bottom zone holds exactly one thing,
@@ -54,9 +54,10 @@ Row 3 is I/O on the left and power supply on the right.
   not a system metric) and the I/O keys, pink = the power-supply half of row 3.
   These hues are outside the green/amber/red family on purpose, which is
   reserved for status
-- `CCD2` reads the `k10temp` sensor labelled `Tccd2` and shows `--` when the CPU
-  has a single CCD (or is not an AMD with `k10temp`): it never falls back to
-  another sensor, so a `--` there really means "this CPU has no second CCD"
+- `UTIL` is the average load across all threads; `CORE` is the busiest single
+  logical CPU. On a wide CPU the two tell different stories: 3 % average can
+  still mean one thread pinned at 100 %. `CORE` is amber from 90 %, and
+  deliberately **never red**: one saturated thread is normal, not an alarm
 - Temperatures: green normal → yellow → red
 - `LOAD` has no absolute warning level: it is normalised by core count, yellow
   from 70 % of the cores, red from 100 %. The 5 min average stays a gray sub-line
@@ -71,7 +72,7 @@ Row 3 is I/O on the left and power supply on the right.
 
 | Group | Sources |
 |---|---|
-| CPU | `psutil` (UTIL), `/proc/loadavg` (LOAD, 1 and 5 min), `k10temp` or `coretemp` hwmon (TEMP, CCD1, CCD2), RAPL (PWR), cpufreq (max core CLK) |
+| CPU | `psutil.cpu_percent` (UTIL average, CORE busiest thread), `/proc/loadavg` (LOAD, 1 and 5 min), `k10temp` or `coretemp` hwmon (TEMP, CCD1), RAPL (PWR), cpufreq (max core CLK) |
 | GPU | `nvidia-smi` (util, temp, VRAM, power, fan, clock) |
 | SYSTEM | RAM/swap (`psutil.virtual_memory`, `psutil.swap_memory`), NVMe hwmon temperatures (NV1–NV3), `os.statvfs("/")` (DSK: free space) |
 | I/O | `/proc/net/dev` (DOWN, UP), `/proc/diskstats` (READ, WRITE) |
@@ -156,7 +157,6 @@ Corsair PSU); other hardware works, some keys fall back:
 | Key | Intended | Fallback when unavailable |
 |---|---|---|
 | CPU PWR | RAPL package power | **PSU total − GPU** (rest of the system) if the counter is unreadable |
-| CPU CCD2 | second CCD temperature (`Tccd2`) | **`--`** on CPUs with a single CCD (8-core X3D parts, most Intel) |
 | CPU FAN | motherboard fan | no fan sensor on the MSI board → uses the PSU fan (pwm %) |
 | CPU 12V | vcore | vcore not exposed → **PSU 12V rail** |
 | GPU MAX | hotspot | hotspot not exposed by `nvidia-smi` → rolling peak of GPU temp |
