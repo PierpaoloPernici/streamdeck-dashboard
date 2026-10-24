@@ -23,7 +23,7 @@ ROW 3  LINUX   LOAD | DOWN | UP   | READ|WRITE| 12V  | UPT | TIME
 - Unit inside the value, not in the label: `45°` `66W` `3.7G` `2.8G`
 - `LOAD` shows the 1 min average large, with the 5 min one as a small second line
 - Colored bar **only** on UTIL, VRAM, RAM and FAN %
-- Temperatures: white normal → yellow → red
+- Temperatures: green normal → yellow → red
 - `--` = sensor unavailable at that moment (never a placeholder `0`)
 
 ## Data sources
