@@ -124,6 +124,7 @@ checkout. Remove it with `./install-service.sh --remove`.
 ```bash
 .venv/bin/python deck_stats.py --preview   # whole deck preview (8×4) in /tmp/deck_preview
 .venv/bin/python benchmark.py --help       # per-tick cost breakdown (see Performance)
+.venv/bin/python test_differential.py      # offline checks of the key push path
 journalctl --user -u deck-stats -f         # live logs
 ```
 
@@ -132,18 +133,23 @@ journalctl --user -u deck-stats -f         # live logs
 Measured with `benchmark.py` on the reference machine (MSI X870E, Ryzen 9, RTX
 5090, Corsair PSU, Stream Deck XL): Python 3.14.8, Pillow 13.0.0, psutil 7.2.2,
 40 timed iterations per phase and a 180 s soak of the systemd service. All
-figures are **per tick** (one tick = sample + render + push):
+figures are **per tick** (sample + render + encode + push), and the USB row is
+a **full 32-key push** — what the loop pays when every key still has to be
+repainted:
 
 | Phase | median | p95 | share |
 |---|--:|--:|--:|
-| Sensor acquisition (sysfs + psutil, `nvidia-smi` excluded) | 27.0 ms | 27.3 | 40 % |
+| Sensor acquisition (sysfs + psutil, `nvidia-smi` excluded) | 27.0 ms | 27.3 | 39 % |
 | `nvidia-smi` subprocess | 11.2 ms | 11.8 | 16 % |
-| Rendering the 32 key images | 3.5 ms | 3.5 | 5 % |
-| Pushing 32 images to the deck (USB) | 25.8 ms | 120.5 | 38 % |
-| **Total** | **68.3 ms** | | **4.6 % of the 1500 ms interval** |
+| Rendering the 32 key images | 3.4 ms | 3.5 | 5 % |
+| PIL → native key format ×32 | 1.0 ms | 1.0 | 1.5 % |
+| Pushing 32 images to the deck (USB) | 25.7 ms | 121.4 | 38 % |
+| **Total** | **68.5 ms** | | **4.6 % of the 1500 ms interval** |
 
 The `p95` of the USB row is the **first** refresh after the device is opened
-(libusb/HID warm-up); the remaining ticks stay near 26 ms.
+(libusb/HID warm-up); the remaining ticks stay near 26 ms. The encode row is
+worth a note: one cold pass costs 5 ms, 200 warm passes give the 1.0 ms above —
+a first-sample number is not a per-tick number.
 
 Inside the 27 ms of acquisition, the cost is hardware, not Python:
 
@@ -154,38 +160,88 @@ Inside the 27 ms of acquisition, the cost is hardware, not Python:
 | cpufreq ×16, `/proc/diskstats`, per-thread `cpu_percent` | 0.06–0.08 ms each |
 | psutil mem/swap, `/proc/net/dev`, `statvfs`, loadavg, k10temp, RAPL | 0.001–0.03 ms each |
 
+### Differential refresh
+
+Before changing anything, the frames were only **observed**: the device was
+wrapped in a proxy that compares and times every write while the real loop
+keeps sending all 32 of them. Over 199 ticks at 1.5 s on a working desktop:
+
+| what the observation showed | |
+|---|--:|
+| frames identical to the one before | 67 % of all keys |
+| — plain keys (23 of them) | 89 % identical |
+| — keys carrying a sparkline (9) | 10 % identical |
+| keys that actually move per tick | median 11, min 7, max 14 |
+| cost of comparing 32 encoded frames | 0.026 ms per tick |
+
+So most of the USB traffic is re-sending a picture the key already shows. The
+dashboard now compares the **encoded bytes** per key and skips the ones that did
+not change (`push_key()`): comparing the picture rather than the sensor value is
+the point, because a number can stay put while its picture changes anyway (a
+sparkline advancing, a value crossing its warn threshold).
+
+| measured with the device free, A/B in the same process | |
+|---|--:|
+| full 32-key push | 26.5–27.0 ms per tick |
+| differential push | **4.1 ms** median, p95 5.9, max 26.1 |
+| saving | **22.4 ms/tick — 85 % of the USB phase** |
+| frames pushed per tick, end to end (120 s run) | median 11, p95 14, max 16 of 32 |
+| USB per tick, same 120 s run | 11.1 ms median, against ~31 ms for a full push |
+
+How much is saved depends on how busy the machine is: 5–6 keys move per tick on
+an idle desktop, ~11 while it works, which is why the USB row is a range
+(4–11 ms) and not one number. The first tick after a reconnect still pushes
+all 32.
+
+`.venv/bin/python test_differential.py` checks the parts that are easy to get
+wrong and impossible to notice from the outside, with a fake deck: the first
+tick paints 32, later ticks only what changed, a reconnect repaints everything,
+a failed HID write leaves the frame owed, and crossing a warn/crit threshold
+really does produce different bytes.
+
 Resources, sampled from `/proc` every 2 s for 180 s while the service ran:
 
 | | mean | median | p95 | max |
 |---|--:|--:|--:|--:|
 | RSS | 35.2 MB | 35.2 | 35.2 | 35.2 |
-| CPU (one core) | 0.89 % | 1.00 | 1.50 | 2.00 |
+| CPU (one core) | 0.78 % | 0.50 | 1.50 | 1.50 |
 
-No growth over the window (+0.0 MB), threads 4 → 4, file descriptors 8 → 8.
-systemd's own accounting agrees: 9.98 s of CPU over 9 min 51 s, 41.9 MB peak.
+No growth over the window (35.1 → 35.2 MB), threads 4 → 4, file descriptors
+8 → 8. systemd's own accounting agrees: 9.98 s of CPU over 9 min 51 s, 41.9 MB
+peak. The 32 cached frames (~220 KB) and the JPEG encoder buffers are already
+inside these numbers; the CPU is a little lower than before the differential
+refresh, which is the write traffic disappearing.
 
 **These are latencies, not CPU time.** Most of the 68 ms is waiting on devices
 — a subprocess, a PSU register, the HID endpoint — which is why the process
 uses under 1 % of a core. A rewrite in a compiled language would shrink the
-3.5 ms of PIL work, not the 27 ms of sensor reads and 26 ms of USB push, so it
-buys nothing measurable here.
+3.4 ms of PIL work, not the 27 ms of sensor reads and the ~26 ms of USB push,
+so it buys nothing measurable here. The same question was asked of `nvidia-smi`
+itself: reading the GPU through NVML instead of the subprocess costs 0.5 ms
+instead of 11 ms per tick, but mapping `libnvidia-ml` pulls the driver's state
+into the process and RSS jumps by ~25 MB (35 → 60 MB). Not worth it at 1.5 s,
+so `nvidia-smi` stays.
 
-Headroom at faster refresh rates, *theoretical* (the measured 68.3 ms divided
-by the interval — the behaviour of the PSU and the USB endpoint at high rates
-is not benchmarked):
+Headroom at faster refresh rates, *theoretical* (the measured per-tick time
+divided by the interval — the behaviour of the PSU and the USB endpoint at high
+rates is not benchmarked). With the differential refresh a tick lands between
+47 ms (quiet machine, ~5 keys moving) and 54 ms (busy machine, ~11 keys moving):
 
 | `DECK_UPDATE_SECONDS` | tick occupancy |
 |---|--:|
-| 1.5 (default) | 4.6 % |
-| 1.0 | 6.8 % |
-| 0.5 | 13.7 % |
-| 0.25 | 27.3 % |
+| 1.5 (default) | 3–4 % |
+| 1.0 | 5–6 % |
+| 0.5 | 9–11 % |
+| 0.25 | 19–23 % |
 
 The default stays 1.5 s: for temperatures and system statistics it is already
-faster than readable, and it leaves the bus and the PSU idle.
+faster than readable, and it leaves the bus and the PSU idle. Refreshing faster
+also does **not** make the differential refresh cheaper — at 0.5 s the share of
+unchanged frames measured the same 67 % as at 1.5 s.
 
 ```bash
 .venv/bin/python benchmark.py --skip-deck        # sensors + render + soak, device untouched
+.venv/bin/python test_differential.py            # push path, no device needed
 systemctl --user stop deck-stats                 # the USB phase needs the device
 .venv/bin/python benchmark.py --skip-soak
 systemctl --user start deck-stats
@@ -193,9 +249,7 @@ systemctl --user start deck-stats
 
 `--soak-pid auto` (default) reads the `MainPID` of the running service, so the
 RSS/CPU numbers come from the real process and cost it nothing; `--iters` sets
-the iteration count. Two measurements worth taking before optimising further:
-NVML in place of the `nvidia-smi` subprocess (11 ms/tick), and differential
-refresh, pushing only the keys whose image changed (26 ms/tick).
+the iteration count.
 
 ## Notes
 
@@ -224,6 +278,14 @@ refresh, pushing only the keys whose image changed (26 ms/tick).
   `--`, the rest of the row stays live and nothing is logged every tick. Only
   a read that genuinely failed (timeout, missing binary, short CSV row) blanks
   the whole GPU block.
+- Each key frame is compared with the one already on the key, **as encoded
+  bytes**, and an identical frame is not re-sent. Comparing the picture rather
+  than the sensor value is the point: the number can stay while the picture
+  changes anyway (sparkline advancing, colour crossing a threshold). The cache
+  belongs to one connection cycle and starts empty, so after an unplug or an
+  error all 32 keys are re-sent — a cache carried over from the previous cycle
+  would keep skipping frames that are no longer on the device. A write that
+  fails leaves the frame owed, so the next tick tries it again.
 - If the deck is unplugged the script reconnects automatically; on exit
   (Ctrl-C or SIGTERM from systemd) it blanks the keys instead of leaving stale
   numbers lit.
@@ -278,7 +340,8 @@ How this project differs from the options above:
 - **Deep hardware access on Linux.** CPU package power from RAPL, PSU
   telemetry from the `corsairpsu` hwmon (VRM temperature, 12 V rail, fan),
   NVMe hwmon temperatures — none of the projects above expose these.
-- **Whole 32-key frame** refreshed at a fixed rate from `time.monotonic()`.
+- **Whole 32-key frame** refreshed at a fixed rate from `time.monotonic()`,
+  with only the keys whose encoded frame actually changed going back over USB.
 
 ## License
 

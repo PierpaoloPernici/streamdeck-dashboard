@@ -211,12 +211,13 @@ def bench_deck(iters):
         tbl.add("render 32 (prepared once)", [(time.perf_counter() - t0) * 1e3])
 
         natives = []
-        t0 = time.perf_counter()
-        for img in imgs:
-            natives.append(PILHelper.to_native_key_format(deck, img))
-        tbl.add("PIL -> native key format x32",
-                [(time.perf_counter() - t0) * 1e3],
-                f"{len(natives[0])} B/key")
+
+        def convert_all():
+            return [PILHelper.to_native_key_format(deck, img) for img in imgs]
+        natives = convert_all()
+        med_convert = tbl.add("PIL -> native key format x32",
+                              timeit(convert_all, max(5, iters // 2), warmup=1),
+                              f"{len(natives[0])} B/key")
 
         per_key = timeit(lambda: deck.set_key_image(0, natives[0]), 10, warmup=2)
         tbl.add("set_key_image (1 key)", per_key)
@@ -230,7 +231,7 @@ def bench_deck(iters):
         for name, fn in (("deck.reset()", deck.reset),
                          ("set_brightness", lambda: deck.set_brightness(70))):
             tbl.add(name, timeit(fn, 5, warmup=1))
-        return med
+        return med, med_convert
     finally:
         for img in imgs if imgs else []:
             img.close()
@@ -335,7 +336,8 @@ def main():
     parts = [("sensors (sysfs+psutil)", med_sensors), ("nvidia-smi", med_gpu),
              ("render 32 keys", med_render)]
     if med_deck:
-        parts.append(("USB set_key_image x32", med_deck))
+        parts.append(("PIL -> native format x32", med_deck[1]))
+        parts.append(("USB set_key_image x32", med_deck[0]))
     total = sum(v for _, v in parts)
     for name, v in parts:
         print(f"  {name:<24}{v:>9.1f} ms{100 * v / total:>7.1f} %")
@@ -343,6 +345,12 @@ def main():
     print(f"  budget {ds.UPDATE_SECONDS * 1000:.0f} ms/tick -> "
           f"{total / (ds.UPDATE_SECONDS * 10):.1f} % used, "
           f"idle {(ds.UPDATE_SECONDS * 1000 - total) / 1000:.2f} s")
+    if med_deck:
+        print("  note: this is a FULL 32-key push, which is what the phase "
+              "measures.\n        run() sends only the keys whose frame "
+              "changed: 4.1-11.1 ms/tick measured, depending on how many "
+              "keys moved (32 on the first tick after a reconnect). See the "
+              "README Performance section.")
 
     if not args.skip_soak and args.soak_pid:
         bench_soak(args.soak_pid, args.soak_seconds)
