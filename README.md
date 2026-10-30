@@ -119,6 +119,20 @@ journalctl --user -u deck-stats -f
 from the `deck-stats.service` template, substituting the absolute path of your
 checkout. Remove it with `./install-service.sh --remove`.
 
+It also enables **lingering** for your user (`sudo loginctl enable-linger $USER`).
+This is required on a headless box: without it systemd-logind stops
+`user@UID.service` as soon as your last login session ends, which takes the
+dashboard down with it on every SSH logout. With linger the user manager starts
+at boot and keeps running with no session open, so the deck comes back by
+itself after a reboot without any SSH login.
+
+Check it with:
+
+```bash
+loginctl show-user "$USER" -p Linger      # Linger=yes
+systemctl status user@$UID.service         # active (running), no session needed
+```
+
 ## Utilities
 
 ```bash

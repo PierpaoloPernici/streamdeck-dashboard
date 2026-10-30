@@ -9,7 +9,8 @@
 
 [Unit]
 Description=Stream Deck stats dashboard (CPU/GPU/temp)
-After=graphical-session.target
+# No graphical session is needed: this runs on headless machines too.
+# Do not add After=graphical-session.target — it is not reached there.
 
 [Service]
 Type=simple
